@@ -12,6 +12,13 @@ class ConstraintTests(unittest.TestCase):
         self.assertEqual([x['pass'] for x in checks.check('2026-12-01',rules,[])],[True,True])
         self.assertEqual([x['pass'] for x in checks.check('x'*13,rules,[])],[False,False])
 
+    def test_digit_separators_do_not_hide_a_number(self):
+        rules = [{'kind':'contains','label':'现行预算','values':['28000']}]
+        for text in ('预算上限28000元', '预算上限28,000元', '预算上限28，000元'):
+            with self.subTest(text=text):
+                self.assertEqual(outcome(text, rules), [True])
+        self.assertEqual(outcome('预算上限2800元', rules), [False])
+
     def test_missing_paragraph_is_unscorable(self):
         rules = [{'kind':'preserve','turn':1,'paragraph':2}]
         self.assertIsNone(checks.check('text',rules,[{'answer':'one paragraph'}])[0]['pass'])

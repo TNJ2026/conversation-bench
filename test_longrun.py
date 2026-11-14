@@ -138,6 +138,18 @@ class LongRunnerTests(unittest.TestCase):
         self.assertIsNone(self.state()['pending'])
         self.assertFalse(any(k.endswith('/recall') for k in self.state()['results']))
 
+    def test_compaction_summary_accepts_text_content_blocks(self):
+        # DSH 0.2.x returns the summary as text content blocks instead of a string.
+        def mutate(prompt, result):
+            if prompt=='/compact':
+                for event in result['events']:
+                    if event['type']=='compaction/summary':
+                        event['data']['summary']=[{'type':'text','text':event['data']['summary']}]
+        longrun.run(self.path,driver=self.driver(mutate))
+        self.assertEqual(self.state()['status'],'completed')
+        proof = self.state()['results']['B/compact']['compaction_proof']
+        self.assertIn('Synthetic summary',proof['summary'])
+
     def test_compaction_must_cover_every_seed_message(self):
         def mutate(prompt,result):
             if prompt=='/compact':

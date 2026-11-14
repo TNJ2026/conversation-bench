@@ -17,6 +17,10 @@ CSS_IMPORT = re.compile(r'@import\s+["\']([^"\']+)', re.I)
 def normalize(text):
     return text.replace('\r\n', '\n').replace('\r', '\n')
 
+def without_digit_separators(text):
+    """Treat 28,000 as 28000 so formatting is not mistaken for a missing figure."""
+    return re.sub(r'(?<=\d)[,\uFF0C](?=\d)', '', text)
+
 def paragraphs(text):
     return [p.strip() for p in re.split(r'\n\s*\n', normalize(text)) if p.strip()]
 
@@ -86,7 +90,8 @@ def check(text, rules, earlier):
     for rule in rules:
         kind = rule['kind']
         if kind == 'contains':
-            missing = [x for x in rule['values'] if x not in text]
+            haystack = without_digit_separators(text)
+            missing = [x for x in rule['values'] if without_digit_separators(x) not in haystack]
             results.append({'check': rule.get('label', '包含指定文本'), 'pass': not missing, 'detail': '缺少：' + ', '.join(missing) if missing else '全部出现'})
         elif kind == 'dates':
             passed, detail = check_dates(text, rule['values'])
