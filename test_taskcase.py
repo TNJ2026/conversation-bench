@@ -82,7 +82,7 @@ class TaskCaseTests(unittest.TestCase):
     def test_multiline_examples_cannot_supply_an_actual_answer(self):
         spec=taskcase.build_fixed_task_case()['probe_anchors']['receipt']
         code=taskcase.RECEIPT
-        for heading in ('示例：','### 示例','引用：','Example:'):
+        for heading in ('示例：','### 示例','例如：','比如：','引用：','Example:'):
             for content in (f'QL-E017：{code}',f'\nQL-E017：{code}\n',
                             f'```text\nQL-E017：{code}\n```'):
                 answer=f'{heading}\n{content}\n实际答案：无法确认'
@@ -91,6 +91,16 @@ class TaskCaseTests(unittest.TestCase):
         self.assertFalse(longrun.receipt_pair_matches(spec,code,f'> QL-E017：{code}'))
         self.assertTrue(longrun.receipt_pair_matches(
             spec,code,f'示例：\nQL-E017：00000000000000000\n\n实际答案：\nQL-E017：{code}'))
+
+    def test_negative_reference_does_not_open_example_block(self):
+        spec=taskcase.build_fixed_task_case()['probe_anchors']['receipt']
+        code=taskcase.RECEIPT
+        self.assertEqual(longrun.RECEIPT_MATCHER_VERSION,'labelled-receipt-line-v1.1')
+        self.assertTrue(longrun.receipt_pair_matches(
+            spec,code,f'本轮结论不引用任何文件；以下为核对结果。\nQL-E017：{code}'))
+        self.assertFalse(longrun.receipt_pair_matches(
+            spec,code,f'引用：\nQL-E017：{code}\n实际答案：无法确认'))
+        self.assertTrue(longrun.receipt_pair_matches(spec,code,f'QL-E017：{code}'))
 
     def test_unknown_match_mode_is_rejected_before_run(self):
         case=taskcase.build_fixed_task_case()

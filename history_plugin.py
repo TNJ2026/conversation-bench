@@ -3,7 +3,10 @@ import hashlib
 import json
 from pathlib import Path
 
-SOURCE = Path(__file__).parent/'plugins'/'current-history'
+SOURCES = {'0.1.0':Path(__file__).parent/'plugins'/'current-history',
+           '0.1.1':Path(__file__).parent/'plugins'/'current-history-v0.1.1'}
+DEFAULT_VERSION = '0.1.1'
+SOURCE = SOURCES[DEFAULT_VERSION]
 FILES = ('package.json','index.cjs','cordis.patch.yml')
 TOOLS = ('current_history_search','current_history_read')
 
@@ -18,12 +21,15 @@ def hashes(folder):
     return result
 
 
-def freeze(root):
-    source_hashes = hashes(SOURCE)
+def freeze(root, version=DEFAULT_VERSION):
+    if version not in SOURCES:
+        raise ValueError('Unsupported history plugin version: '+str(version))
+    source = SOURCES[version]
+    source_hashes = hashes(source)
     target = root/'history-plugin'
     target.mkdir()
     for name in FILES:
-        (target/name).write_bytes((SOURCE/name).read_bytes())
+        (target/name).write_bytes((source/name).read_bytes())
     if hashes(target) != source_hashes:
         raise ValueError('History plugin changed while freezing.')
     return {'name':'conversation-bench-current-history',

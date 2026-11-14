@@ -23,9 +23,15 @@ class HistoryPluginTests(unittest.TestCase):
                 longrun.create(args)
             self.assertFalse((root/'run').exists())
             args.transport='web'
+            args.history_plugin=False;args.history_plugin_version='0.1.0'
+            with self.assertRaisesRegex(ValueError,'requires --history-plugin'):
+                longrun.create(args)
+            self.assertFalse((root/'run').exists())
+            args.history_plugin=True
             with patch.object(longrun,'__file__',str(root/'project'/'longrun.py')),contextlib.redirect_stdout(io.StringIO()):
                 longrun.create(args)
             state=longrun.load(Path(args.output));meta=state['config']['history_plugin']
+            self.assertEqual(meta['version'],'0.1.0')
             self.assertEqual(meta['activation'],'recovery-only')
             self.assertEqual(meta['sha256'],history_plugin.hashes(Path(meta['snapshot'])))
 
@@ -42,6 +48,17 @@ class HistoryPluginTests(unittest.TestCase):
             (Path(meta['snapshot'])/'index.cjs').write_text('changed')
             with self.assertRaisesRegex(ValueError,'Frozen'):
                 history_plugin.stage(home,meta)
+
+    def test_old_version_remains_selectable_and_frozen_runs_do_not_follow_default(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);old=root/'old';old.mkdir();new=root/'new';new.mkdir()
+            old_meta=history_plugin.freeze(old,'0.1.0');new_meta=history_plugin.freeze(new)
+            self.assertEqual(old_meta['version'],'0.1.0')
+            self.assertEqual(new_meta['version'],'0.1.1')
+            self.assertNotEqual(old_meta['sha256']['index.cjs'],new_meta['sha256']['index.cjs'])
+            home=root/'home';home.mkdir()
+            patch=history_plugin.stage(home,old_meta)
+            self.assertEqual(history_plugin.hashes(patch.parent),old_meta['sha256'])
 
     def test_plugin_cannot_be_staged_through_a_symlink(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -67,8 +84,10 @@ class HistoryPluginTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which('node'),'Node is required for native plugin tests')
     def test_native_plugin_isolation_and_read_contract(self):
-        result=subprocess.run(['node','--test',str(history_plugin.SOURCE/'test.cjs')],capture_output=True,text=True,timeout=30)
-        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        for version,source in history_plugin.SOURCES.items():
+            with self.subTest(version=version):
+                result=subprocess.run(['node','--test',str(source/'test.cjs')],capture_output=True,text=True,timeout=30)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
 
 if __name__=='__main__':unittest.main()

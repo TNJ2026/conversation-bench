@@ -73,7 +73,7 @@ class WebHostTests(unittest.TestCase):
         with self.assertRaisesRegex(DriverError,'registration was not observed'):
             WebHostDriver(config).perform(self.root/'missing',self.root/'ws','id','hello',False,self.root/'missing.jsonl')
         self.fake.write_text(FAKE.replace('server = HTTPServer',
-            'assert sys.argv.index("--patch") < sys.argv.index("--no-open")\nprint("BENCH_CURRENT_HISTORY_READY 0.1.0",flush=True)\nserver = HTTPServer'))
+            'assert sys.argv.index("--patch") < sys.argv.index("--no-open")\nprint("BENCH_CURRENT_HISTORY_READY '+meta['version']+'",flush=True)\nserver = HTTPServer'))
         result=WebHostDriver(config).perform(self.root/'registered',self.root/'ws','id','hello',False,self.root/'registered.jsonl')
         self.assertTrue(result['history_plugin']['registered'])
         self.assertEqual(result['history_plugin']['sha256'],meta['sha256'])

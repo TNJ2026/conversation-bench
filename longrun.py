@@ -107,6 +107,8 @@ def create(args):
         raise ValueError('Model, provider and a positive load-batch count are required.')
     if getattr(args,'history_plugin',False) and getattr(args,'transport','sdk') != 'web':
         raise ValueError('The current-history plugin requires --transport web.')
+    if getattr(args,'history_plugin_version',None) and not getattr(args,'history_plugin',False):
+        raise ValueError('--history-plugin-version requires --history-plugin.')
     case = load(getattr(args,'casefile',None) or longcase.CASE)
     pressure = case['pressure_turns'][:args.load_batches]
     if args.load_batches > len(pressure):
@@ -132,7 +134,7 @@ def create(args):
              'prefix':prefix, 'branch_order':order, 'results':{},
              'seed_sequences':{}, 'prefix_sequences':{}, 'checkpoint':None, 'pending':None, 'status':'ready', 'problems':[]}
     if getattr(args,'history_plugin',False):
-        state['config']['history_plugin'] = history_plugin.freeze(root)
+        state['config']['history_plugin'] = history_plugin.freeze(root,getattr(args,'history_plugin_version',None) or history_plugin.DEFAULT_VERSION)
     save(path, state)
     print(path)
 
@@ -346,6 +348,9 @@ def task_outcomes(case, anchors, protocol_valid):
             'task_protocol_eligible':protocol_valid}
 
 
+RECEIPT_MATCHER_VERSION = 'labelled-receipt-line-v1.1'
+
+
 def receipt_display_text(line):
     """Unwrap paired emphasis at field boundaries, never repair token contents."""
     emphasis = re.compile(
@@ -363,6 +368,7 @@ def receipt_assertions(spec, answer):
     ticket = re.compile(r'(?<![A-Za-z0-9_-])'+re.escape(spec['ticket'])+
                         r'(?![A-Za-z0-9_-])[ \t]*[:：][ \t]*')
     example = re.compile(r'示例|例如|比如|引用|e\.g\.|example',re.I)
+    example_heading = re.compile(r'^\s*(?:#{1,6}\s*)?(?:\*\*|__)?(?:示例|例如|比如|引用|example|e\.g\.)(?:\*\*|__)?\s*[:：]?\s*$',re.I)
     actual = re.compile(r'^(?:#{1,6}[ \t]*)?(?:实际答案|正式答案|我的答案|最终答案|答案|回答|核对结果)[ \t]*(?:[:：]|$)')
     label = re.compile(r'^回执码(?:[ \t]*(?:为|是))?[ \t]*[:：]?[ \t]*')
     brackets = {'（':'）','(':')','[':']','【':'】'}
@@ -375,7 +381,7 @@ def receipt_assertions(spec, answer):
         matches = list(ticket.finditer(line))
         # A standalone example heading scopes following lines until an explicit
         # answer heading. Blank lines do not turn example content into an answer.
-        if not matches and example.search(line):
+        if not matches and example_heading.match(line):
             example_block = True
         if example_block or line.startswith('>'):
             continue
@@ -559,6 +565,7 @@ def main(argv=None):
     c.add_argument('--load-batches',type=positive,default=12); c.add_argument('--seed',type=int,default=42)
     c.add_argument('--timeout',type=positive,default=900)
     c.add_argument('--history-plugin',action='store_true',help='Freeze the current-session read-only plugin; enable it only during recovery (web transport).')
+    c.add_argument('--history-plugin-version',choices=tuple(history_plugin.SOURCES),help='Plugin version to freeze; defaults to '+history_plugin.DEFAULT_VERSION+'. Existing runs retain their own frozen version.')
     c.add_argument('--transport',choices=('sdk','web'),default='sdk',
                    help='sdk: stdio JSON-RPC; web: the shipped browser runtime over its local /api transport')
     for command in ('run','next','extend','grade','report'):
