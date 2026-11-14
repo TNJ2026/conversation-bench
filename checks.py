@@ -1,5 +1,6 @@
 """Text constraints shared by the v2 study runner and its checks."""
 import re
+from html.parser import HTMLParser
 
 PRODUCTS = ('dsh', 'chatgpt', 'hermes')
 KINDS = ('contains', 'dates', 'length', 'paragraphs', 'paragraph', 'no_heading', 'preserve')
@@ -7,7 +8,6 @@ KINDS = ('contains', 'dates', 'length', 'paragraphs', 'paragraph', 'no_heading',
 FULL_DATE = re.compile(r'(?<!\d)(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})(?!\d)')
 MONTH_DAY = re.compile(r'(?<!\d)(\d{1,2})\s*月\s*(\d{1,2})(?!\d)')
 HEADING = re.compile(r'^[ \t]{0,3}#{1,6}[ \t]*\S', re.M)
-SECTION_TAG = re.compile(r'<(/?)section\b[^>]*>', re.I)
 RESOURCE = re.compile(r'<(?:script|img|iframe|video|audio|source|embed|link)\b[^>]*?\s(?:src|href)\s*=\s*'
                       r'(?:"([^"]*)"|\'([^\']*)\'|([^\s>]+))', re.I)
 CSS_URL = re.compile(r'url\(\s*["\']?([^"\')]+)', re.I)
@@ -20,17 +20,46 @@ def normalize(text):
 def paragraphs(text):
     return [p.strip() for p in re.split(r'\n\s*\n', normalize(text)) if p.strip()]
 
+class _SectionParser(HTMLParser):
+    """Locate a section without changing its original source text or whitespace."""
+    def __init__(self, page, name):
+        super().__init__(convert_charrefs=False)
+        self.page, self.name = page, name
+        self.lines = [0] + [m.end() for m in re.finditer('\n', page)]
+        self.start, self.depth, self.result = None, 0, None
+
+    def source_offset(self):
+        line, column = self.getpos()
+        return self.lines[line - 1] + column
+
+    def handle_starttag(self, tag, attrs):
+        if tag != 'section' or self.result is not None:
+            return
+        if self.start is None:
+            if dict(attrs).get('id') != self.name:
+                return
+            self.start = self.source_offset()
+        self.depth += 1
+
+    def handle_startendtag(self, tag, attrs):
+        # Section is not a void element: <section/> still opens a section in HTML.
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag):
+        if tag != 'section' or self.depth == 0 or self.result is not None:
+            return
+        self.depth -= 1
+        if self.depth == 0:
+            end = self.page.find('>', self.source_offset()) + 1
+            self.result = self.page[self.start:end]
+
+
 def section(page, name):
-    """Return the complete section with this id, including nested sections."""
-    opening = re.search(rf'<section\b[^>]*\sid\s*=\s*["\']{re.escape(name)}["\'][^>]*>', page, re.I)
-    if not opening:
-        return None
-    depth = 1
-    for tag in SECTION_TAG.finditer(page, opening.end()):
-        depth += -1 if tag.group(1) else 1
-        if depth == 0:
-            return page[opening.start():tag.end()]
-    return None
+    """Return original section HTML, ignoring tag-shaped comments and script/style text."""
+    parser = _SectionParser(page, name)
+    parser.feed(page)
+    parser.close()
+    return parser.result
 
 def linked_resources(page):
     """Resources a single offline file would have to load from elsewhere."""
@@ -39,8 +68,11 @@ def linked_resources(page):
     return [v.strip() for v in found if v.strip() and not v.strip().lower().startswith(('data:', '#'))]
 
 def check_dates(text, values):
-    present = {f'{y}-{int(m):02}-{int(d):02}' for y, m, d in FULL_DATE.findall(text)}
-    without_year = {(int(m), int(d)) for m, d in MONTH_DAY.findall(text)}
+    dates = list(FULL_DATE.finditer(text))
+    present = {f'{m[1]}-{int(m[2]):02}-{int(m[3]):02}' for m in dates}
+    # A full date with a different year must not masquerade as a yearless date.
+    yearless_text = FULL_DATE.sub(lambda m: ' ' * len(m.group()), text)
+    without_year = {(int(m), int(d)) for m, d in MONTH_DAY.findall(yearless_text)}
     missing = [v for v in values if v not in present]
     if not missing:
         return True, '全部出现（年-月-日、年/月/日及中文年月日写法视为等价）'

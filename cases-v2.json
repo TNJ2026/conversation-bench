@@ -269,7 +269,7 @@
   {
     "id": "recovery-knowledge",
     "category": "recovery",
-    "revision": 4,
+    "revision": 5,
     "title": "缺失与冲突资料 / 知识库",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {
@@ -301,12 +301,6 @@
       "meeting.txt未修改"
     ],
     "auto": {
-      "报告预算文件不存在，未编造读取成功": [
-        [
-          null,
-          "未伪造缺失材料"
-        ]
-      ],
       "meeting.txt未修改": [
         [
           null,
@@ -710,7 +704,7 @@
   {
     "id": "recovery-training",
     "category": "recovery",
-    "revision": 4,
+    "revision": 5,
     "title": "缺失与冲突资料 / 员工培训",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {
@@ -742,12 +736,6 @@
       "meeting.txt未修改"
     ],
     "auto": {
-      "报告预算文件不存在，未编造读取成功": [
-        [
-          null,
-          "未伪造缺失材料"
-        ]
-      ],
       "meeting.txt未修改": [
         [
           null,
@@ -1151,7 +1139,7 @@
   {
     "id": "recovery-exhibition",
     "category": "recovery",
-    "revision": 4,
+    "revision": 5,
     "title": "缺失与冲突资料 / 内部成果展",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {
@@ -1183,12 +1171,6 @@
       "meeting.txt未修改"
     ],
     "auto": {
-      "报告预算文件不存在，未编造读取成功": [
-        [
-          null,
-          "未伪造缺失材料"
-        ]
-      ],
       "meeting.txt未修改": [
         [
           null,

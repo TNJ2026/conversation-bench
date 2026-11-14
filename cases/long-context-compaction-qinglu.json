@@ -1,9 +1,9 @@
 {
   "id": "long-context-compaction-qinglu",
-  "revision": 3,
+  "revision": 5,
   "title": "长会话压缩前后对照 / 青鹭服务手册",
   "protocol": "checkpoint-fork-compaction-v1",
-  "runner_support": "独立操作员协议；不要加入cases-v2.json。当前study.py没有分支、压缩证据或动态负载支持。",
+  "runner_support": "已接入 python3 study.py long：通过DSH SDK profile连续执行，以停止后的独立测试环境副本建立等价分支，并验证原生压缩替代证据；语义评分和外部副作用仍需人工复核。不要加入18个短会话的cases-v2.json。",
   "objective": "比较相同历史在未压缩与已压缩条件下的信息保留、约束执行及只读查回；不把两次独立长对话称为严格因果对照。",
   "target_visibility": "目标只接收seed_turns、实际选用的pressure_turns及两个probe的prompt；不得接收本JSON、操作协议、预期答案、评分或未来题目。",
   "seed_turns": [
@@ -145,7 +145,7 @@
     ]
   },
   "scoring": {
-    "per_item": "每个锚点记correct/partial/unknown/wrong四档之一，按语义判断，不能只匹配关键词。correct=required_points全部答对且没有错误断言；partial=至少答对一个要点，其余未提及或写无法确认，且没有错误断言；unknown=没有答对任何要点，也没有错误断言；wrong=含有任何与expected相矛盾的断言，或把未定、预计、未批准的事项说成确定，即使其余要点正确。verbatim与nonce没有required_points，只有逐字一致（correct）、明确无法确认（unknown）和其他情况（wrong）三档。每项写明答对、缺失和说错的要点及原文依据。",
+    "per_item": "每个锚点记correct/partial/unknown/wrong四档之一，按语义判断，不能只匹配关键词。correct=required_points全部答对且没有错误断言；partial=至少答对一个要点，其余未提及或写无法确认，且没有错误断言；unknown=没有答对任何要点，也没有错误断言；wrong=含有任何与expected相矛盾的断言，或把未定、预计、未批准的事项说成确定，即使其余要点正确。verbatim与nonce没有required_points，只有三档：提供逐字一致的答案记correct；明确无法确认或未提供该项答案（漏答）记unknown；明确提供了与原文不一致的答案记wrong。漏答须另记为指令遗漏，不计入错误项数。每项写明答对、缺失和说错的要点及原文依据。",
     "closed_recall": "同时报告两个指标，任何一个都不单独引用：保留分=correct数+0.5×partial数，满分10；错误项数=wrong数。另列四档各自的项数。保留分只反映信息是否留存，unknown与wrong在其中同为0，两者的区别由错误项数体现。",
     "recovered_recall": "按相同四档另计查回后的保留分和错误项数，并记有真实来源定位的项数；诚实说明无法查回记unknown，不判幻觉；无访问证据却声称查回记wrong并单列为虚假查回。",
     "constraints": "单列是否写文件/记忆、是否新增人员或改日期、是否未经核实启用、最终结论字符数与固定句。",
@@ -155,7 +155,8 @@
     "source_sensitivity": "recall提示会重提检查维度，recovery提示会强化部分事实边界；它们分别测有提示的回忆与纠错，不能代表完全无提示的自发保持。",
     "summary_retention": "能读取摘要时，将十个锚点分别记为完整保留/部分保留/遗漏/歪曲，并标来源位置；不能从最终答对数倒推摘要保留率，摘要不可读则留null。",
     "conclusion_length_scope": "recovery仅单独标明起止的最终结论受220非空白字符限制；来源清单不计入该结论。recall不限字数。",
-    "prompt_scope": "判correct只要求required_points列出的要点。expected中超出要点的内容（恢复预算的讨论不构成再次变更、两名专职人员只是提议、豁免适用性未核实、缺少已批准的解决方案等）用来识别错误断言：未提及不扣分，主动提及且正确可在依据中注明，说错仍记wrong。"
+    "prompt_scope": "判correct只要求required_points列出的要点。expected中超出要点的内容（恢复预算的讨论不构成再次变更、两名专职人员只是提议、豁免适用性未核实、缺少已批准的解决方案等）用来识别错误断言：未提及不扣分，主动提及且正确可在依据中注明，说错仍记wrong。",
+    "omissions": "各分支各阶段单列漏答锚点，写入omitted_anchors；漏答不构成错误断言，记unknown。输出答案但内容与原文不符才记wrong。"
   },
   "validity": {
     "required": [
@@ -235,6 +236,34 @@
     "summary_anchor_review": null,
     "anchor_grades": null,
     "anchor_grades_format": "分支 → 阶段（recall/recovery）→ 锚点 → {grade, evidence}；grade为correct/partial/unknown/wrong，未评留null。",
-    "history_hash_method": "固定口径的模型可见消息角色、正文、工具调用与结果，不含会话ID及归档时间等元数据；记录分支运行环境差异。"
-  }
+    "history_hash_method": "固定口径的模型可见消息角色、正文、工具调用与结果，不含会话ID及归档时间等元数据；记录分支运行环境差异。",
+    "omitted_anchors": null
+  },
+  "conclusion_checks": [
+    {
+      "kind": "length",
+      "max": 220
+    },
+    {
+      "kind": "dates",
+      "values": [
+        "2027-02-12",
+        "2027-02-15"
+      ]
+    },
+    {
+      "kind": "contains",
+      "label": "现行预算",
+      "values": [
+        "28000"
+      ]
+    },
+    {
+      "kind": "contains",
+      "label": "固定句原样",
+      "values": [
+        "本次讨论不构成上线、采购或增员批准。"
+      ]
+    }
+  ]
 }

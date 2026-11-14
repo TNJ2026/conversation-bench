@@ -34,6 +34,15 @@ class ConstraintTests(unittest.TestCase):
         self.assertEqual(outcome('2026-12-15启用，12月18日审查', rules), [None])
         self.assertEqual(outcome('12月15日启用', rules), [False])
 
+    def test_wrong_year_is_not_treated_as_an_omitted_year(self):
+        rules = [{'kind':'dates','values':['2026-12-15','2026-12-18']}]
+        for text in ('2027年12月15日启用，2027年12月18日审查',
+                     '2026年12月15日启用，2027 年 12 月 18 日审查',
+                     '12月15日启用，2027年12月18日审查'):
+            with self.subTest(text=text):
+                self.assertEqual(outcome(text, rules), [False])
+        self.assertEqual(outcome('2026年12月15日启用，12月18日审查', rules), [None])
+
     def test_paragraphs_survive_windows_newlines_and_padded_blank_lines(self):
         for text in ('one\n\ntwo\n\nthree', 'one\r\n\r\ntwo\r\n\r\nthree', 'one\n \t\ntwo\n\n\n\nthree\n', '\n\none\n\ntwo\n\nthree'):
             with self.subTest(text=text):
@@ -71,6 +80,24 @@ class ConstraintTests(unittest.TestCase):
         self.assertIn('regex', result[0]['check'])
 
 class HtmlTests(unittest.TestCase):
+    def test_section_ignores_tags_in_comments_and_raw_script_or_style(self):
+        for embedded in ('<!-- example: <section> -->', '<!-- example: </section> -->',
+                         '<script>const example = "<section></section>";</script>',
+                         '<script>const example = "</section>";</script>',
+                         '<style>/* <section> */</style>'):
+            with self.subTest(embedded=embedded):
+                original = '<section id="overview">before' + embedded + 'after</section>'
+                self.assertEqual(checks.section(original, 'overview'), original)
+                self.assertNotEqual(checks.section(original, 'overview'),
+                                    checks.section(original.replace('after', 'changed'), 'overview'))
+        fake = '<!-- <section id="overview">fake</section> -->'
+        actual = '<section id="overview">real</section>'
+        self.assertEqual(checks.section(fake + actual, 'overview'), actual)
+
+    def test_section_keeps_original_spelling_entities_and_line_endings(self):
+        original = '<SECTION\r\n data-note="a>b" ID=overview>A&amp;B\r\n<section>inner</section>tail</SECTION >'
+        self.assertEqual(checks.section('prefix\r\n' + original + 'suffix', 'overview'), original)
+
     def test_section_includes_nested_sections(self):
         page = '<main><section class="a" id="overview"><section>inner</section>tail</section><SECTION ID=\'risks\'>r</SECTION></main>'
         self.assertEqual(checks.section(page,'overview'), '<section class="a" id="overview"><section>inner</section>tail</section>')
