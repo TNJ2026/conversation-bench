@@ -65,7 +65,7 @@ def create(args):
         raise ValueError('Use a new output directory; existing runs are never overwritten.')
     if not args.model.strip() or not args.provider.strip() or args.load_batches < 1:
         raise ValueError('Model, provider and a positive load-batch count are required.')
-    case = load(longcase.CASE)
+    case = load(getattr(args,'casefile',None) or longcase.CASE)
     root = path.parent
     root.mkdir(parents=True)
     identity = uuid.uuid4().hex
@@ -390,6 +390,7 @@ def main(argv=None):
     c = sub.add_parser('create'); c.add_argument('--output',required=True); c.add_argument('--model',required=True)
     c.add_argument('--provider',default='deepseek-official'); c.add_argument('--effort'); c.add_argument('--dsh-bin',default='dsh')
     c.add_argument('--app-version',default='unverified',help='Actual DSH app/CLI version; serverInfo.version is only the SDK protocol version')
+    c.add_argument('--case',dest='casefile',help='Case JSON path; defaults to the shipped case')
     c.add_argument('--load-batches',type=positive,default=12); c.add_argument('--seed',type=int,default=42)
     c.add_argument('--timeout',type=positive,default=900)
     c.add_argument('--transport',choices=('sdk','web'),default='sdk',
