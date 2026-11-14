@@ -96,7 +96,8 @@ class LongRunnerTests(unittest.TestCase):
         for stages in scores['grades'].values():
             for anchors in stages.values():
                 for item in anchors.values(): item.update({'grade':'unknown','evidence':'Synthetic response provides no anchor answer.'})
-                anchors['nonce' if 'nonce' in anchors else 'f1']['omitted'] = True
+                key = 'nonce' if 'nonce' in anchors else 'f1' if 'f1' in anchors else next(iter(anchors))
+                anchors[key]['omitted'] = True
         longrun.save(path,scores)
         return path,scores
 
@@ -137,6 +138,44 @@ class LongRunnerTests(unittest.TestCase):
         with patch.object(longrun,'__file__',str(self.root/'project'/'longrun.py')):
             longrun.create(args)
         self.path=path
+
+    def test_task_completion_requires_every_condition_and_valid_protocol(self):
+        import taskcase
+        state=self.state()
+        state['case']=taskcase.build_fixed_task_case()
+        state['case_hash']=longrun.digest(state['case'])
+        # Keep this protocol fixture small; the saved case separately enforces 12 batches.
+        state['case']['minimum_load_batches']=1
+        state['case_hash']=longrun.digest(state['case'])
+        state['prefix']=state['case']['seed_turns']+state['case']['pressure_turns'][:1]
+        longrun.save(self.path,state)
+        longrun.run(self.path)
+        state=self.state()
+        for key,value in state['results'].items():
+            if key.endswith(('/recall','/recovery')):
+                value['answer']+='\n**QL-E017：回执码 '+taskcase.RECEIPT+'**'
+        longrun.save(self.path,state)
+        path,scores=self.finish_grades()
+        for stages in scores['grades'].values():
+            for anchors in stages.values():
+                for mark in anchors.values():
+                    mark.update(grade='correct',omitted=False,evidence='Synthetic acceptance for runner testing only.')
+        scores['grades']['B']['recall']['budget']['grade']='unknown'
+        longrun.save(path,scores);longrun.grade(self.path,path)
+        m=self.state()['metrics']
+        self.assertEqual(m['B']['recall']['retention'],9)
+        self.assertFalse(m['B']['recall']['full_delivery_success'])
+        self.assertEqual(m['B']['recall']['tasks_completed'],2)
+        self.assertTrue(m['B']['recovery']['full_delivery_success'])
+        longrun.report(self.path)
+        report=longrun.load(self.path.parent/'report.json')
+        self.assertAlmostEqual(report['differences']['recall']['task_success_rate_B_minus_A'],-1/3)
+        self.assertIn('B/compact',report['action_elapsed_seconds'])
+        self.assertIn('Full delivery success',(self.path.parent/'report.html').read_text())
+        scores['protocol']['unexposed'].update({'pass':False,'evidence':'Synthetic leak invalidates this fixture trial.'})
+        longrun.save(path,scores);longrun.grade(self.path,path)
+        self.assertIsNone(self.state()['metrics']['B']['recovery']['full_delivery_success'])
+        self.assertIsNone(self.state()['metrics']['B']['recovery']['task_success_rate'])
 
     def test_insufficient_detail_load_is_rejected_without_creating_a_run(self):
         with self.assertRaisesRegex(ValueError,'more load'):

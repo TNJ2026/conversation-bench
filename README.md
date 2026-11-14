@@ -197,6 +197,10 @@ Omitted answers are recorded separately as instruction omissions and graded unkn
 
 For detail-recall experiments, use `--case cases/long-context-compaction-qinglu-v7.json --load-batches 12`. V7 queries unique keyed receipts rather than periodic topic labels. All queried source tickets must be supplied, and the runner enforces the case's three allowed grades. Legacy V6 is retained for historical reference but cannot start or continue a new trial because its answers can be inferred from later batches. See the [updated protocol](docs/long-context-runner.md).
 
+## Task completion after compaction (v8)
+
+[V8 / V8.1 protocol and commands](docs/task-success-v8.md) adds a project handoff task using the existing isolated A/A_repeat/B runner. It checks current decisions, evidence, and actionable next steps. All ten acceptance conditions must pass for full delivery success; passing nine is still incomplete. Closed-book delivery and assisted recovery are reported separately. Protocol-invalid runs have no valid success rate. V7 remains a separate exact-recall benchmark. Original V8 results are exploratory due to an ambiguous receipt instruction. Use the frozen V8.1 case for new baselines: it clarifies the placeholder and accepts common emphasis, bracket, and label presentation while requiring the correct ticket/receipt pair on the same line. Old cases and scoring rules remain unchanged. V8.1 has no model results yet; plugin support is a proposed experiment, not an implemented integration.
+
 ## Run the project checks
 
 ```sh

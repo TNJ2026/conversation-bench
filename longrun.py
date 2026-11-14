@@ -73,6 +73,16 @@ def validate_prefix(case, prefix):
     if case.get('id','').endswith('-v6'):
         raise ValueError('Legacy v6 periodic-topic probes are deprecated; create a new run with the v7 receipt case.')
     allowed_grades(case)
+    if 'task_groups' in case:
+        groups = case['task_groups']
+        if (not isinstance(groups,dict) or not groups or
+                any(not isinstance(v,list) or not v or any(not isinstance(a,str) for a in v) for v in groups.values())):
+            raise ValueError('Task groups must contain non-empty acceptance lists.')
+        members = [a for group in groups.values() for a in group]
+        if len(members) != len(set(members)) or set(members) != set(case['expected']):
+            raise ValueError('Task groups must partition all acceptance criteria exactly once.')
+        if 'partial' in allowed_grades(case):
+            raise ValueError('Task outcomes require complete acceptance, without partial grades.')
     if case.get('generation',{}).get('kind') == 'keyed-receipts' and set(case.get('probe_anchors',{})) != set(case['expected']):
         raise ValueError('Every receipt probe must declare its original source turn.')
     turns = {turn['id']:turn['prompt'] for turn in prefix}
@@ -80,6 +90,8 @@ def validate_prefix(case, prefix):
     if count < case.get('minimum_load_batches',0):
         raise ValueError('Selected load does not contain every probed ticket; more load batches are required.')
     for anchor, spec in case.get('probe_anchors',{}).items():
+        if spec.get('match_mode') not in (None,'labelled-receipt-line-v1'):
+            raise ValueError('Unsupported receipt match mode: '+str(spec['match_mode']))
         source = turns.get(spec['source_turn'],'')
         pattern = rf'^工单 {re.escape(spec["ticket"])}｜[^\n]*回执码：{re.escape(case["expected"][anchor])}。'
         if not re.search(pattern,source,re.M):
@@ -304,6 +316,45 @@ def answer_manifest(state):
     return digest({k:digest(v) for k,v in state['results'].items()})
 
 
+def task_outcomes(case, anchors, protocol_valid):
+    """Diagnostic checks are not independent tasks or valid trials by themselves."""
+    groups = case.get('task_groups')
+    if groups is None:
+        return {}
+    passed = {task:all(anchors[a]['grade'] == 'correct' for a in criteria)
+              for task,criteria in groups.items()}
+    count = sum(passed.values())
+    return {'task_passes':passed, 'tasks_completed':count, 'tasks_total':len(groups),
+            'task_success_rate':count/len(groups) if protocol_valid else None,
+            'full_delivery_success':all(passed.values()) if protocol_valid else None,
+            'task_protocol_eligible':protocol_valid}
+
+
+def receipt_pair_matches(spec, expected, answer):
+    if spec.get('match_mode') == 'labelled-receipt-line-v1':
+        # Same-line association matters; emphasis, bracket wrapping, and an
+        # explicit field label (including 回执码为/是) do not. A code that only
+        # appears after an example/quote marker is not the actual answer.
+        text = answer.replace('*','').replace('`','').replace('_','')
+        pattern = (r'(?<![A-Za-z0-9_-])'+re.escape(spec['ticket'])+
+                   r'(?![A-Za-z0-9_-])[ \t]*[:：][ \t]*'
+                   r'(?:回执码(?:[ \t]*(?:为|是))?[ \t]*[:：]?[ \t]*)?'
+                   r'[（(\[【]?([A-Za-z0-9]{16})[）)\]】]?(?![A-Za-z0-9_])')
+        example = re.compile(r'示例|例如|比如|引用|e\.g\.|example', re.I)
+        values = []
+        for match in re.finditer(pattern,text):
+            line_start = text.rfind('\n',0,match.start())+1
+            if example.search(text[line_start:match.start()]):
+                continue
+            values.append(match.group(1))
+        return bool(values) and all(value == expected for value in values)
+    if spec.get('match_mode') is not None:
+        raise ValueError('Unsupported receipt match mode: '+str(spec['match_mode']))
+    # Preserve the published v7/v8 rule for frozen runs.
+    pattern = re.escape(spec['ticket'])+r'\s*[:：]\s*'+re.escape(expected)+r'(?![0-9A-Za-z])'
+    return bool(re.search(pattern,answer))
+
+
 def grade(path, score_path=None):
     state = load(path)
     if state['status'] != 'completed':
@@ -347,6 +398,7 @@ def grade(path, score_path=None):
         else:
             conclusion_checks[branch] = text_checks.check(text,state['case'].get('conclusion_checks',[]),[])
     metrics = {}
+    protocol_valid = all(c['pass'] for c in scores['protocol'].values())
     if not isinstance(scores.get('grades'), dict) or set(scores['grades']) != set(BRANCHES):
         raise ValueError('All three branches must be graded.')
     for branch in BRANCHES:
@@ -377,8 +429,7 @@ def grade(path, score_path=None):
                         raise ValueError('An exact-text pass contradicts the actual answer.')
                 spec = state['case'].get('probe_anchors',{}).get(anchor)
                 if spec and value == 'correct':
-                    pattern = re.escape(spec['ticket'])+r'\s*[:：]\s*'+re.escape(state['case']['expected'][anchor])+r'(?![0-9A-Za-z])'
-                    if not re.search(pattern,result['answer']):
+                    if not receipt_pair_matches(spec,state['case']['expected'][anchor],result['answer']):
                         raise ValueError('A receipt pass contradicts the ticket/receipt pair in the answer.')
                 if mark['retrieved'] and (stage != 'recovery' or not tools or not isinstance(mark.get('sources'), list)
                                           or not mark['sources'] or not all(isinstance(s,str) and s.strip() for s in mark['sources'])):
@@ -386,8 +437,9 @@ def grade(path, score_path=None):
                 counts[value] += 1; omitted += mark['omitted']; retrieved += mark['retrieved']
             metrics[branch][stage] = dict(counts, retention=counts['correct']+0.5*counts['partial'],
                                            errors=counts['wrong'], omitted=omitted, retrieved=retrieved)
+            metrics[branch][stage].update(task_outcomes(state['case'],anchors,protocol_valid))
     save(path.parent/'scores-reviewed.json', scores)
-    state['protocol_valid'] = all(c['pass'] for c in scores['protocol'].values())
+    state['protocol_valid'] = protocol_valid
     state['conclusion_checks'] = conclusion_checks
     state['metrics'] = metrics; state['scores_sha256'] = digest(scores); save(path, state)
     print('Grades validated and saved. Run report to view the comparison.')
@@ -400,6 +452,7 @@ def report(path):
               'checkpoint':state['checkpoint'], 'metrics':state.get('metrics'), 'protocol_valid':state.get('protocol_valid'),
               'compaction_proof':state['results'].get('B/compact',{}).get('compaction_proof'),
               'elapsed_seconds':{b:sum(r['elapsed_seconds'] for k,r in state['results'].items() if k.startswith(b+'/')) for b in ('prefix',*BRANCHES)},
+              'action_elapsed_seconds':{k:r['elapsed_seconds'] for k,r in state['results'].items()},
               'tokens':None,
               'conclusion_checks':state.get('conclusion_checks'),
               'notice':('Web-host runtime experiment (no native window), not a desktop-UI score. '
@@ -407,6 +460,7 @@ def report(path):
                         'SDK-profile experiment, not a desktop-UI score. ') + 'A single triplet does not establish a causal effect.'}
     rows = []
     metrics = state.get('metrics')
+    task_mode = bool(state['case'].get('task_groups'))
     if metrics:
         output['differences'] = {}
         for stage in ('recall','recovery'):
@@ -415,13 +469,22 @@ def report(path):
             output['differences'][stage] = {'B_minus_A':delta, 'A_repeat_minus_A':noise,
                                            'outside_repeat_variation':abs(delta)>abs(noise) if state.get('protocol_valid') else None,
                                            'B_errors_minus_A':b['errors']-a['errors']}
+            if task_mode:
+                output['differences'][stage]['task_success_rate_B_minus_A'] = (
+                    b['task_success_rate']-a['task_success_rate'] if state.get('protocol_valid') else None)
         for branch in BRANCHES:
             for stage in ('recall','recovery'):
                 m = metrics[branch][stage]
-                rows.append([branch,stage,m['retention'],m['errors'],m['omitted'],m['retrieved']])
+                row = [branch,stage,m['retention'],m['errors'],m['omitted'],m['retrieved']]
+                if task_mode:
+                    row += [str(m['tasks_completed'])+'/'+str(m['tasks_total']),m['full_delivery_success']]
+                rows.append(row)
     save(path.parent/'report.json', output)
     e = lambda v:html.escape(str(v))
-    table = '<table border="1"><tr>'+''.join('<th>'+e(h)+'</th>' for h in ('Branch','Stage','Retention / 10','Wrong','Omitted','Retrieved'))+'</tr>'
+    headers = ['Branch','Stage',('Acceptance passed / ' if task_mode else 'Retention / ')+str(len(state['case']['expected'])),'Wrong','Omitted','Retrieved']
+    if task_mode:
+        headers += ['Subtasks passed (diagnostic)','Full delivery success (valid trials only)']
+    table = '<table border="1"><tr>'+''.join('<th>'+e(h)+'</th>' for h in headers)+'</tr>'
     table += ''.join('<tr>'+''.join('<td>'+e(v)+'</td>' for v in row)+'</tr>' for row in rows)+'</table>'
     page = '<!doctype html><meta charset="utf-8"><title>Compaction comparison</title><h1>Compaction comparison</h1>'
     page += '<p>'+e(output['notice'])+'</p>'+table+'<pre>'+e(json.dumps(output,ensure_ascii=False,indent=2))+'</pre>'
