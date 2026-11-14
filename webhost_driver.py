@@ -32,7 +32,8 @@ def sandbox_profile(home, workspace):
                    if entry.name.startswith(('run.', 'scores', 'report')) or entry.name == 'raw']
     studies = repo/'studies'
     if studies.is_dir():
-        denied += [child for child in studies.iterdir() if child.is_dir() and child.resolve() != run_root]
+        denied += [child for child in studies.iterdir()
+                   if child.is_file() or child.resolve() != run_root]
     lines = ['(version 1)', '(allow default)']
     for path in denied:
         escaped = str(path).replace('"', '\\"')
