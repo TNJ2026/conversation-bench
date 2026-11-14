@@ -152,9 +152,9 @@ Plans freeze their case snapshots and randomize case order. Two-app plans retain
 
 ## Checks and limitations
 
-Text checks cover required strings, minimum and maximum non-whitespace character counts, and verbatim preservation of paragraphs identified by blank lines. Counts include punctuation and Markdown. The short-text revision cases require 450–550 characters before shortening to 220; the final turn does not restate the key constraints. An initial draft that is too short fails the initial requirement; a later answer below 220 characters does not by itself demonstrate successful shortening.
+Text checks cover required strings, required dates, minimum and maximum non-whitespace character counts, paragraph count, the absence of Markdown heading lines, a fixed paragraph, and verbatim preservation of paragraphs identified by blank lines. Counts include punctuation and Markdown. Dates written as `2026-12-15`, `2026/12/15`, or `2026年12月15日` are treated as the same date; a date without its year is marked for manual review instead of pass or fail. Paragraph checks expect the answer file to contain only the deliverable, since an introductory line counts as a paragraph. A check the tool cannot run is reported as needing review, never silently skipped. The short-text revision cases require 450–550 characters before shortening to 220; the final turn does not restate the key constraints. An initial draft that is too short fails the initial requirement; a later answer below 220 characters does not by itself demonstrate successful shortening.
 
-Artifact-review cases save HTML, Markdown, CSV, and source-material snapshots after each turn. They check the source file's hash and specified HTML sections verbatim; discussion-only turns compare file hashes. Hashes cannot detect a file being changed and then restored, or establish that a browser preview rendered correctly. Preview behavior, tool activity, and live interruption still require operator evidence. Files and screenshots may contain personal information; inspect them before sharing.
+Artifact-review cases save HTML, Markdown, CSV, and source-material snapshots after each turn. They check the source file's hash, that the first report contains all three required sections and references no external scripts, styles, or media, that the two untouched sections stay verbatim, and that the risk section actually changed in each revision turn. Discussion-only and read-only turns compare file hashes with the previous turn. Missing-material cases flag a workspace that gains the file the prompt asked for but the materials never contained. Interruption cases compare the recorded delay with the five-second limit and leave the timing for manual review when no delay was measured. Files that are not UTF-8 are still recorded and flagged for review. A changed section is not proof of a correct change. Hashes cannot detect a file being changed and then restored, or establish that a browser preview rendered correctly. Preview behavior, tool activity, and live interruption still require operator evidence. Files and screenshots may contain personal information; inspect them before sharing.
 
 The short-conversation catalog is `cases-v2.json`. Running `suite.py` regenerates the built-in V2 cases and overwrites manual edits to that file. `checks.py` provides the text-constraint checks.
 
@@ -164,10 +164,12 @@ The separate [long-context compaction case](docs/long-context-compaction-qinglu.
 
 This is a separate operator protocol, is not yet integrated into `study.py`, and is not included in the 18 short-conversation cases. Generating the case does not constitute a completed compaction test or a measured result.
 
+`longcase.py` regenerates the synthetic load in that JSON and leaves the hand-written turns, probes, and scoring untouched. If twelve batches are not enough to reach compaction, `python3 longcase.py --extra N` prints N further batches with new ticket numbers without rewriting the case file.
+
 ## Run the project checks
 
 ```sh
 python3 -m unittest -v
 ```
 
-Tests use temporary data and do not manufacture product-evaluation results. They cover character limits, case counts, application selection and ordering, protocol exclusions, retention of valid failures, local file changes, per-turn recording, scoring, HTML escaping, two- and three-app anonymized exports, and compatibility with older V2 plans.
+Tests use temporary data and do not manufacture product-evaluation results. They cover every text check, case counts and agreement between the saved catalogs and their generators, application selection and ordering, protocol exclusions, retention of valid failures, section and file-change checks, missing-material and interruption handling, per-turn recording, resuming, score validation, command-line defaults, HTML escaping, two- and three-app anonymized exports, compatibility with older V2 plans, and the long-context load's numbering, variety, and freedom from anchor wording.

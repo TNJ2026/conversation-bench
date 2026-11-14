@@ -3,6 +3,7 @@ import argparse
 import contextlib
 import copy
 import io
+import sys
 import tempfile
 import unittest
 from collections import Counter
@@ -13,11 +14,70 @@ import checks
 import study
 import suite
 
+BEGIN=dict(model='test-model',app_version='1',permissions='test',plugins='none',memory='off',
+           method='desktop',isolated=True,unexposed=True)
+SUBMIT=dict(notes=None,elapsed=None,first_feedback=None,active_seconds=None,corrections=None,
+            actions=None,interrupt_delay=None,interruption_observed=False)
+FIXED='预算上限20000元；项目负责人待定。'
+
 
 def args(**kwargs):
     return argparse.Namespace(**kwargs)
 
-class StudyTests(unittest.TestCase):
+def page(risks='B',overview='A',decisions='C'):
+    return (f'<section id="overview">{overview}</section><section id="risks">{risks}</section>'
+            f'<section id="decisions">{decisions}</section>')
+
+def cli(*argv):
+    out=io.StringIO()
+    with patch.object(sys,'argv',['study.py',*map(str,argv)]), contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+        study.main()
+    return out.getvalue()
+
+class Run:
+    """One temporary project; nothing is written next to the real repository."""
+    def __init__(self,root,plan,out):
+        self.root,self.plan,self.out=root,plan,out
+
+    def begin(self,job='J001',plan=None,**changes):
+        plan=plan or self.plan
+        study.begin(args(plan=str(plan),job=job,**(BEGIN|changes)))
+        self.path=plan.parent/'records'/(job+'.json')
+        self.workspace=Path(self.record()['workspace'])
+        return self
+
+    def record(self):
+        return study.load(self.path)
+
+    def write(self,name,content):
+        (self.workspace/name).write_text(content,encoding='utf-8')
+
+    def submit(self,answer='answer',**changes):
+        file=self.root/'answer.txt';file.write_text(answer,encoding='utf-8')
+        study.submit(args(record=str(self.path),answer=str(file),**(SUBMIT|changes)))
+        return {c['check']:c['pass'] for c in self.record()['turns'][-1]['checks']}
+
+    def finish(self,outcome='completed',**scores):
+        file=self.root/'scores.json';study.save(file,study.form(self.record())|scores)
+        study.finish(args(record=str(self.path),scores=str(file),outcome=outcome))
+        return self.record()['status']
+
+    def said(self):
+        text=self.out.getvalue();self.out.seek(0);self.out.truncate(0)
+        return text
+
+@contextlib.contextmanager
+def project(*case_ids,products=('dsh',)):
+    with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()) as out:
+        root=Path(directory)/'project';root.mkdir()
+        catalog={c['id']:c for c in suite.build()}
+        study.save(root/'cases-v2.json',[catalog[i] for i in case_ids])
+        plan=root/'studies'/'test'/'plan.json'
+        with patch.object(study,'ROOT',root):
+            study.create(args(cases=None,products=list(products),repeat=1,seed=42,mode='default',output=str(plan)))
+            yield Run(root,plan,out)
+
+class CatalogTests(unittest.TestCase):
     def test_catalog_has_three_cases_per_category(self):
         catalog=suite.build()
         self.assertEqual(len({c['id'] for c in catalog}),18)
@@ -28,6 +88,36 @@ class StudyTests(unittest.TestCase):
                 self.assertEqual(c['turns'][0]['checks'][0]['min'],450)
                 self.assertNotIn('220',c['turns'][-1]['prompt'])
 
+    def test_saved_catalog_matches_generator(self):
+        self.assertEqual(study.load(Path(study.__file__).with_name('cases-v2.json')),suite.build())
+
+    def test_every_rule_kind_is_implemented(self):
+        for c in suite.build():
+            for turn in c['turns']:
+                for rule in turn['checks']:
+                    self.assertIn(rule['kind'],checks.KINDS,c['id'])
+
+    def test_revision_checks_cover_layout_and_fixed_sentence(self):
+        for c in suite.build():
+            if c['category']!='revision':continue
+            for index in (0,1):
+                kinds={rule['kind'] for rule in c['turns'][index]['checks']}
+                self.assertLessEqual({'length','dates','paragraphs','no_heading','paragraph'},kinds)
+            for index in (2,4):
+                rules=c['turns'][index]['checks']
+                self.assertIn('preserve',{rule['kind'] for rule in rules})
+                self.assertTrue(any(rule['kind']=='contains' and '项目负责人待定' in rule['values'][0] for rule in rules))
+
+    def test_absent_material_is_requested_without_revealing_it_is_absent(self):
+        for c in suite.build():
+            if c['category']!='recovery':continue
+            self.assertEqual(len(c['absent']),1)
+            name=c['absent'][0]
+            self.assertIn(name,c['turns'][0]['prompt'])
+            self.assertNotIn(name,c['fixtures'])
+            self.assertNotIn('missing',name)
+
+class StudyTests(unittest.TestCase):
     def test_length_minimum_rejects_trivially_short_draft(self):
         rule=[{'kind':'length','min':450,'max':550}]
         self.assertFalse(checks.check('a'*200,rule,[])[0]['pass'])
@@ -122,15 +212,18 @@ class StudyTests(unittest.TestCase):
                 self.assertEqual(len(jobs),len(products))
                 self.assertEqual(study.plan_products(saved),products)
                 for job in jobs:
-                    study.begin(args(plan=str(plan),job=job['id'],model='test-model',app_version='1',permissions='test',plugins='none',memory='off',method='desktop',isolated=True,unexposed=True))
+                    study.begin(args(plan=str(plan),job=job['id'],**BEGIN))
                     rp=study.record_path(plan,job);record=study.load(rp); workspace=Path(record['workspace'])
                     self.assertEqual(set(p.name for p in workspace.iterdir()),{'meeting.txt'})
                     answer=root/'answer.txt';answer.write_text('<script>bad()</script>')
-                    page='<section id="overview">A</section><section id="risks">B</section><section id="decisions">C</section>'
-                    for i in range(4):
-                        (workspace/'report.html').write_text(page.replace('>A<','>changed<') if i==3 and job['product']=='chatgpt' else page)
-                        study.submit(args(record=str(rp),answer=str(answer),notes=None,elapsed=None,first_feedback=None,active_seconds=None,corrections=None,actions=None,interrupt_delay=None,interruption_observed=False))
+                    # The discussion turn (index 2) leaves the file as the previous turn wrote it.
+                    for i,risks in enumerate(('draft','revised','revised','final')):
+                        overview='changed' if i==3 and job['product']=='chatgpt' else 'A'
+                        (workspace/'report.html').write_text(page(risks,overview))
+                        study.submit(args(record=str(rp),answer=str(answer),**SUBMIT))
                     record=study.load(rp)
+                    for turn in record['turns'][:3]:
+                        self.assertTrue(all(c['pass'] for c in turn['checks']))
                     self.assertEqual(all(c['pass'] for c in record['turns'][-1]['checks']),job['product']!='chatgpt')
                     scores=study.form(record);scores['valid']=True
                     for item in scores['acceptance']:item.update({'pass':True,'evidence':'synthetic test only'})
@@ -165,5 +258,208 @@ class StudyTests(unittest.TestCase):
                 self.assertEqual(len(list(plan.parent.glob('*-KEY-DO-NOT-SHARE.json'))),1)
                 key=study.load(next(plan.parent.glob('*-KEY-DO-NOT-SHARE.json')))
                 self.assertEqual(set(key.values()),{j['id'] for j in jobs})
+
+class ReviewCaseTests(unittest.TestCase):
+    def test_untouched_risk_section_fails_both_revision_turns(self):
+        with project('review-knowledge') as run:
+            run.begin();run.write('report.html',page())
+            first=run.submit()
+            self.assertTrue(first['指定section齐全'] and first['单文件无外部资源'])
+            self.assertFalse(run.submit()['risks已修改'])
+            self.assertTrue(run.submit()['本轮未改变文件'])
+            last=run.submit()
+            self.assertFalse(last['risks已修改'])
+            self.assertTrue(last['overview保持不变'] and last['decisions保持不变'])
+
+    def test_first_turn_requires_every_section_and_a_self_contained_file(self):
+        with project('review-knowledge') as run:
+            run.begin()
+            run.write('report.html','<script src="https://cdn.example.com/x.js"></script>'+page().replace('id="decisions"','id="other"'))
+            result=run.submit()
+            self.assertFalse(result['指定section齐全'])
+            self.assertFalse(result['单文件无外部资源'])
+        with project('review-knowledge') as run:
+            run.begin()
+            result=run.submit()
+            self.assertFalse(result['指定section齐全'])
+            self.assertNotIn('单文件无外部资源',result)
+
+    def test_change_after_a_nested_section_is_detected(self):
+        with project('review-knowledge') as run:
+            run.begin()
+            nested='<section>inner</section>'
+            run.write('report.html',page(overview=nested+'before'));run.submit()
+            run.write('report.html',page('revised',overview=nested+'after'))
+            result=run.submit()
+            self.assertFalse(result['overview保持不变'])
+            self.assertTrue(result['decisions保持不变'] and result['risks已修改'])
+
+    def test_discussion_turn_write_and_source_change_are_detected(self):
+        with project('review-knowledge') as run:
+            run.begin();run.write('report.html',page());run.submit()
+            run.write('report.html',page('revised'));run.submit()
+            run.write('scratch.txt','written during the discussion turn')
+            self.assertFalse(run.submit()['本轮未改变文件'])
+            run.write('meeting.txt','tampered')
+            self.assertFalse(run.submit()['原始材料未变'])
+
+    def test_artifact_in_another_encoding_is_recorded_for_manual_review(self):
+        with project('review-knowledge') as run:
+            run.begin()
+            (run.workspace/'report.html').write_bytes(page(overview='项目概况').encode('gbk'))
+            result=run.submit()
+            self.assertIsNone(result['report.html编码'])
+            self.assertTrue(result['指定section齐全'])
+            self.assertIn('项目概况',run.record()['turns'][0]['artifacts']['report.html'])
+
+class FileCaseTests(unittest.TestCase):
+    def test_recovery_flags_a_fabricated_budget_file(self):
+        with project('recovery-knowledge') as run:
+            run.begin()
+            self.assertEqual(run.submit(),{'原始材料未变':True,'未伪造缺失材料':True})
+            run.write('budget-detail.csv','item,cost\nall,19999\n')
+            self.assertFalse(run.submit()['未伪造缺失材料'])
+
+    def test_interrupt_timing_and_read_only_turn(self):
+        for changes,expected in (({'interruption_observed':True,'interrupt_delay':1.5},True),
+                                 ({'interruption_observed':True,'interrupt_delay':9.0},False),
+                                 ({'interruption_observed':True},None)):
+            with self.subTest(changes=changes), project('interrupt-knowledge') as run:
+                run.begin()
+                self.assertIn('在目标仍运行时发送',run.said())
+                self.assertIs(run.submit(**changes)['干预时点'],expected)
+                run.write('report.md','written after being told to stay read-only')
+                self.assertFalse(run.submit()['本轮未改变文件'])
+
+    def test_interrupt_without_observation_cannot_be_valid(self):
+        with project('interrupt-knowledge') as run:
+            run.begin()
+            self.assertNotIn('干预时点',run.submit())
+            self.assertTrue(run.submit()['本轮未改变文件'])
+            with self.assertRaisesRegex(SystemExit,'干预'):
+                run.finish(valid=True)
+            self.assertEqual(run.finish(valid=False,invalid_reason='任务在干预前已完成'),'invalid')
+
+    def test_revision_run_tracks_layout_and_the_fixed_sentence(self):
+        dates='启用日期2026-12-15，安全审查2026年12月18日完成。'
+        draft=lambda second:'\n\n'.join([dates+'字'*140,second,'字'*160,'字'*160])
+        rewritten='预算约两万元，负责人是张三。'
+        with project('revision-knowledge') as run:
+            run.begin()
+            self.assertTrue(all(run.submit(draft(FIXED)).values()))
+            drifted=run.submit(draft(rewritten))
+            self.assertFalse(drifted.pop('第2段原样'))
+            self.assertTrue(all(drifted.values()))
+            # Keeping the rewritten paragraph satisfies "preserve" but not the fixed sentence.
+            self.assertEqual(run.submit(dates+rewritten),
+                             {'非空白字符上限':True,'保留指定日期':True,'保留固定句':False,'保留指定段落':True})
+            self.assertEqual(run.submit('只讨论，不交付。'),{})
+            self.assertEqual(run.submit(dates+FIXED),
+                             {'非空白字符上限':True,'保留指定日期':True,'保留固定句':True,'保留指定段落':False})
+            self.assertEqual(run.finish(valid=True),'completed')
+
+    def test_same_named_plan_directories_get_separate_workspaces(self):
+        with project('review-knowledge') as run:
+            first=run.begin().workspace
+            other=run.root.parent/'elsewhere'/'test'/'plan.json'
+            study.create(args(cases=None,products=['dsh'],repeat=1,seed=42,mode='default',output=str(other)))
+            second=run.begin(plan=other).workspace
+            self.assertNotEqual(first,second)
+            self.assertEqual({p.name for p in second.iterdir()},{'meeting.txt'})
+            self.assertEqual({p.name for p in first.iterdir()},{'meeting.txt'})
+
+class LifecycleTests(unittest.TestCase):
+    def test_create_rejects_bad_input_and_existing_plans(self):
+        with project('ambiguity-knowledge') as run:
+            config=dict(cases=None,products=['dsh'],repeat=1,seed=42,mode='default')
+            for change in ({'cases':'no-such-case'},{'repeat':0},{'output':str(run.plan)}):
+                with self.subTest(change=change), self.assertRaises(SystemExit):
+                    study.create(args(**({'output':str(run.root/'new'/'plan.json')}|config|change)))
+            self.assertFalse((run.root/'new').exists())
+
+    def test_begin_and_submit_refuse_to_overwrite_or_overrun(self):
+        with project('ambiguity-knowledge') as run:
+            with self.assertRaises(SystemExit):
+                run.begin('J999')
+            run.begin()
+            with self.assertRaises(SystemExit):
+                run.begin()
+            with self.assertRaisesRegex(SystemExit,'回答为空'):
+                run.submit('  \n')
+            for _ in range(4):
+                run.submit()
+            with self.assertRaisesRegex(SystemExit,'请 finish'):
+                run.submit()
+            self.assertEqual(len(run.record()['turns']),4)
+            run.finish(valid=True)
+            with self.assertRaisesRegex(SystemExit,'已结案'):
+                run.submit()
+
+    def test_next_follows_the_plan(self):
+        with project('ambiguity-knowledge',products=('dsh','hermes')) as run:
+            first=study.load(run.plan)['jobs'][0]
+            run.said();study.next_job(args(plan=str(run.plan)))
+            fresh=run.said()
+            self.assertIn(first['id']+' | '+first['product'],fresh)
+            self.assertIn('begin',fresh)
+            run.begin();run.submit();run.said()
+            study.next_job(args(plan=str(run.plan)))
+            self.assertIn('当前第 2 轮',run.said())
+            run.finish('failed',valid=True);run.said()
+            study.next_job(args(plan=str(run.plan)))
+            self.assertIn('J002',run.said())
+            run.begin('J002');run.finish('failed',valid=False,invalid_reason='材料放错');run.said()
+            study.next_job(args(plan=str(run.plan)))
+            self.assertIn('均已结案',run.said())
+
+    def test_finish_writes_a_template_and_validates_scores(self):
+        with project('ambiguity-knowledge') as run:
+            run.begin();run.submit()
+            study.finish(args(record=str(run.path),scores=None,outcome='completed'))
+            template=study.load(run.path.with_name('J001-scores.json'))
+            criteria=run.record()['case']['acceptance']
+            self.assertEqual([x['criterion'] for x in template['acceptance']],criteria)
+            self.assertIsNone(template['valid'])
+            self.assertEqual(run.record()['status'],'running')
+            graded=lambda **change:[{'criterion':c,'pass':None,'evidence':''}|(change if i==0 else {}) for i,c in enumerate(criteria)]
+            for scores,message in (({},'valid'),
+                                   ({'valid':'true'},'valid'),
+                                   ({'valid':False},'无效原因'),
+                                   ({'valid':True,'acceptance':graded()[1:]},'验收条目'),
+                                   ({'valid':True,'acceptance':graded(**{'pass':'yes','evidence':'x'})},'true / false / null'),
+                                   ({'valid':True,'acceptance':graded(**{'pass':True})},'evidence'),
+                                   ({'valid':True,'clarity':6},'主观分'),
+                                   ({'valid':True,'clarity':True},'主观分'),
+                                   ({'valid':True,'cooperation':2.5},'主观分'),
+                                   ({'valid':True},'轮次未完成')):
+                with self.subTest(scores=scores), self.assertRaisesRegex(SystemExit,message):
+                    run.finish(**scores)
+            self.assertEqual(run.record()['status'],'running')
+            self.assertEqual(run.finish('failed',valid=True,clarity=2,acceptance=graded(**{'pass':False,'evidence':'第一轮后停止响应'})),'failed')
+
+    def test_command_line_defaults_and_number_validation(self):
+        with project('ambiguity-knowledge') as run:
+            self.assertEqual(cli('list').split('\t')[0],'ambiguity-knowledge')
+            cli('begin','--plan',run.plan,'--job','J001','--model','m')
+            run.path=run.plan.parent/'records'/'J001.json'
+            record=run.record()
+            self.assertEqual(record['protocol'],{'method':'selftest','isolated':False,'unexposed':False})
+            self.assertFalse(study.eligible(record|{'valid':True}))
+            answer=run.root/'answer.txt';answer.write_text('answer',encoding='utf-8')
+            base=('submit','--record',run.path,'--answer',answer)
+            for bad in (('--elapsed','-1'),('--first-feedback','nan'),('--active-seconds','inf'),
+                        ('--corrections','-1'),('--actions','1.5')):
+                with self.subTest(bad=bad), self.assertRaises(SystemExit):
+                    cli(*base,*bad)
+            self.assertEqual(run.record()['turns'],[])
+            cli(*base,'--elapsed','48','--first-feedback','3','--corrections','0')
+            metrics=run.record()['turns'][0]['metrics']
+            self.assertEqual((metrics['elapsed'],metrics['first_feedback'],metrics['corrections']),(48.0,3.0,0))
+            self.assertIsNone(metrics['active_seconds'])
+            self.assertIn('当前第 2 轮',cli('next','--plan',run.plan))
+            with self.assertRaises(SystemExit):
+                cli('create','--products','hermes,hermes','--output',run.root/'again'/'plan.json')
+            cli('create','--products','hermes','--output',run.root/'solo'/'plan.json')
+            self.assertEqual(study.load(run.root/'solo'/'plan.json')['products'],['hermes'])
 
 if __name__=='__main__':unittest.main()

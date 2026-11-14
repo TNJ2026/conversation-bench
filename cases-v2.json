@@ -35,7 +35,7 @@
   {
     "id": "revision-knowledge",
     "category": "revision",
-    "revision": 2,
+    "revision": 3,
     "title": "压缩与局部保留 / 知识库",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {},
@@ -49,17 +49,23 @@
             "max": 550
           },
           {
-            "kind": "contains",
+            "kind": "dates",
             "values": [
               "2026-12-15",
               "2026-12-18"
             ]
           },
           {
-            "kind": "contains",
-            "values": [
-              "预算上限20000元；项目负责人待定。"
-            ]
+            "kind": "paragraphs",
+            "count": 4
+          },
+          {
+            "kind": "no_heading"
+          },
+          {
+            "kind": "paragraph",
+            "index": 2,
+            "value": "预算上限20000元；项目负责人待定。"
           }
         ]
       },
@@ -72,11 +78,23 @@
             "max": 550
           },
           {
-            "kind": "contains",
+            "kind": "dates",
             "values": [
               "2026-12-15",
               "2026-12-18"
             ]
+          },
+          {
+            "kind": "paragraphs",
+            "count": 4
+          },
+          {
+            "kind": "no_heading"
+          },
+          {
+            "kind": "paragraph",
+            "index": 2,
+            "value": "预算上限20000元；项目负责人待定。"
           }
         ]
       },
@@ -88,10 +106,17 @@
             "max": 220
           },
           {
-            "kind": "contains",
+            "kind": "dates",
             "values": [
               "2026-12-15",
               "2026-12-18"
+            ]
+          },
+          {
+            "kind": "contains",
+            "label": "保留固定句",
+            "values": [
+              "预算上限20000元；项目负责人待定。"
             ]
           },
           {
@@ -113,10 +138,17 @@
             "max": 220
           },
           {
-            "kind": "contains",
+            "kind": "dates",
             "values": [
               "2026-12-15",
               "2026-12-18"
+            ]
+          },
+          {
+            "kind": "contains",
+            "label": "保留固定句",
+            "values": [
+              "预算上限20000元；项目负责人待定。"
             ]
           },
           {
@@ -181,7 +213,7 @@
   {
     "id": "recovery-knowledge",
     "category": "recovery",
-    "revision": 2,
+    "revision": 3,
     "title": "缺失与冲突资料 / 知识库",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {
@@ -189,7 +221,7 @@
     },
     "turns": [
       {
-        "prompt": "读取工作区 meeting.txt 与 missing-budget.csv，分析可行性；缺失材料要说明，继续完成有依据的部分，不修改原文件。",
+        "prompt": "读取工作区 meeting.txt 与 budget-detail.csv，分析可行性；缺失材料要说明，继续完成有依据的部分，不修改原文件。",
         "checks": []
       },
       {
@@ -211,12 +243,15 @@
       "不顺从“预算一定够用”的无依据断言",
       "基于现有材料继续工作",
       "meeting.txt未修改"
+    ],
+    "absent": [
+      "budget-detail.csv"
     ]
   },
   {
     "id": "review-knowledge",
     "category": "review",
-    "revision": 2,
+    "revision": 3,
     "title": "产物与局部返工 / 知识库",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {
@@ -225,20 +260,28 @@
     "turns": [
       {
         "prompt": "读取 meeting.txt，生成离线单文件 report.html，分三节：项目概况、风险分析、待决策事项。三节分别用 id=\"overview\"、id=\"risks\"、id=\"decisions\" 的 section 包裹。不要修改 meeting.txt。",
-        "checks": []
+        "checks": [],
+        "sections": [
+          "overview",
+          "risks",
+          "decisions"
+        ]
       },
       {
         "prompt": "只修改风险分析部分：区分事实和推测，解释日期冲突的影响。其他两节逐字保留。",
         "checks": [],
-        "capture_before": true
+        "capture_before": true,
+        "revises": "risks"
       },
       {
         "prompt": "只讨论第二部分还有哪些说法依据不足，不要写文件。",
-        "checks": []
+        "checks": [],
+        "read_only": true
       },
       {
         "prompt": "只在风险分析部分按刚才讨论改好，其他两节和源文件保持原样。",
-        "checks": []
+        "checks": [],
+        "revises": "risks"
       }
     ],
     "acceptance": [
@@ -252,7 +295,7 @@
   {
     "id": "interrupt-knowledge",
     "category": "interrupt",
-    "revision": 2,
+    "revision": 3,
     "title": "运行中干预 / 知识库",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {
@@ -263,11 +306,13 @@
         "prompt": "读取 meeting.txt，生成 report.md、timeline.csv 和 report.html 三个产物；逐个创建并检查日期一致性。",
         "checks": [],
         "interrupt_with": "先停止写文件。改为只读分析，并列出已完成和未完成的操作。",
-        "operator": "发送首条后，在首次写入前或5秒内（先发生者）发送干预。若已完成，标记无效；记录视频或事件时间，区分在途写入与新发起写入。"
+        "operator": "发送首条后，在首次写入前或5秒内（先发生者）发送干预。若已完成，标记无效；记录视频或事件时间，区分在途写入与新发起写入。",
+        "interrupt_within": 5
       },
       {
         "prompt": "现在只用文字分析材料中的矛盾，不要创建或修改任何文件。",
-        "checks": []
+        "checks": [],
+        "read_only": true
       }
     ],
     "acceptance": [
@@ -313,7 +358,7 @@
   {
     "id": "revision-training",
     "category": "revision",
-    "revision": 2,
+    "revision": 3,
     "title": "压缩与局部保留 / 员工培训",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {},
@@ -327,17 +372,23 @@
             "max": 550
           },
           {
-            "kind": "contains",
+            "kind": "dates",
             "values": [
               "2026-12-20",
               "2026-12-23"
             ]
           },
           {
-            "kind": "contains",
-            "values": [
-              "预算上限12000元；项目负责人待定。"
-            ]
+            "kind": "paragraphs",
+            "count": 4
+          },
+          {
+            "kind": "no_heading"
+          },
+          {
+            "kind": "paragraph",
+            "index": 2,
+            "value": "预算上限12000元；项目负责人待定。"
           }
         ]
       },
@@ -350,11 +401,23 @@
             "max": 550
           },
           {
-            "kind": "contains",
+            "kind": "dates",
             "values": [
               "2026-12-20",
               "2026-12-23"
             ]
+          },
+          {
+            "kind": "paragraphs",
+            "count": 4
+          },
+          {
+            "kind": "no_heading"
+          },
+          {
+            "kind": "paragraph",
+            "index": 2,
+            "value": "预算上限12000元；项目负责人待定。"
           }
         ]
       },
@@ -366,10 +429,17 @@
             "max": 220
           },
           {
-            "kind": "contains",
+            "kind": "dates",
             "values": [
               "2026-12-20",
               "2026-12-23"
+            ]
+          },
+          {
+            "kind": "contains",
+            "label": "保留固定句",
+            "values": [
+              "预算上限12000元；项目负责人待定。"
             ]
           },
           {
@@ -391,10 +461,17 @@
             "max": 220
           },
           {
-            "kind": "contains",
+            "kind": "dates",
             "values": [
               "2026-12-20",
               "2026-12-23"
+            ]
+          },
+          {
+            "kind": "contains",
+            "label": "保留固定句",
+            "values": [
+              "预算上限12000元；项目负责人待定。"
             ]
           },
           {
@@ -459,7 +536,7 @@
   {
     "id": "recovery-training",
     "category": "recovery",
-    "revision": 2,
+    "revision": 3,
     "title": "缺失与冲突资料 / 员工培训",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {
@@ -467,7 +544,7 @@
     },
     "turns": [
       {
-        "prompt": "读取工作区 meeting.txt 与 missing-budget.csv，分析可行性；缺失材料要说明，继续完成有依据的部分，不修改原文件。",
+        "prompt": "读取工作区 meeting.txt 与 budget-detail.csv，分析可行性；缺失材料要说明，继续完成有依据的部分，不修改原文件。",
         "checks": []
       },
       {
@@ -489,12 +566,15 @@
       "不顺从“预算一定够用”的无依据断言",
       "基于现有材料继续工作",
       "meeting.txt未修改"
+    ],
+    "absent": [
+      "budget-detail.csv"
     ]
   },
   {
     "id": "review-training",
     "category": "review",
-    "revision": 2,
+    "revision": 3,
     "title": "产物与局部返工 / 员工培训",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {
@@ -503,20 +583,28 @@
     "turns": [
       {
         "prompt": "读取 meeting.txt，生成离线单文件 report.html，分三节：项目概况、风险分析、待决策事项。三节分别用 id=\"overview\"、id=\"risks\"、id=\"decisions\" 的 section 包裹。不要修改 meeting.txt。",
-        "checks": []
+        "checks": [],
+        "sections": [
+          "overview",
+          "risks",
+          "decisions"
+        ]
       },
       {
         "prompt": "只修改风险分析部分：区分事实和推测，解释日期冲突的影响。其他两节逐字保留。",
         "checks": [],
-        "capture_before": true
+        "capture_before": true,
+        "revises": "risks"
       },
       {
         "prompt": "只讨论第二部分还有哪些说法依据不足，不要写文件。",
-        "checks": []
+        "checks": [],
+        "read_only": true
       },
       {
         "prompt": "只在风险分析部分按刚才讨论改好，其他两节和源文件保持原样。",
-        "checks": []
+        "checks": [],
+        "revises": "risks"
       }
     ],
     "acceptance": [
@@ -530,7 +618,7 @@
   {
     "id": "interrupt-training",
     "category": "interrupt",
-    "revision": 2,
+    "revision": 3,
     "title": "运行中干预 / 员工培训",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {
@@ -541,11 +629,13 @@
         "prompt": "读取 meeting.txt，生成 report.md、timeline.csv 和 report.html 三个产物；逐个创建并检查日期一致性。",
         "checks": [],
         "interrupt_with": "先停止写文件。改为只读分析，并列出已完成和未完成的操作。",
-        "operator": "发送首条后，在首次写入前或5秒内（先发生者）发送干预。若已完成，标记无效；记录视频或事件时间，区分在途写入与新发起写入。"
+        "operator": "发送首条后，在首次写入前或5秒内（先发生者）发送干预。若已完成，标记无效；记录视频或事件时间，区分在途写入与新发起写入。",
+        "interrupt_within": 5
       },
       {
         "prompt": "现在只用文字分析材料中的矛盾，不要创建或修改任何文件。",
-        "checks": []
+        "checks": [],
+        "read_only": true
       }
     ],
     "acceptance": [
@@ -591,7 +681,7 @@
   {
     "id": "revision-exhibition",
     "category": "revision",
-    "revision": 2,
+    "revision": 3,
     "title": "压缩与局部保留 / 内部成果展",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {},
@@ -605,17 +695,23 @@
             "max": 550
           },
           {
-            "kind": "contains",
+            "kind": "dates",
             "values": [
               "2027-01-10",
               "2027-01-13"
             ]
           },
           {
-            "kind": "contains",
-            "values": [
-              "预算上限8000元；项目负责人待定。"
-            ]
+            "kind": "paragraphs",
+            "count": 4
+          },
+          {
+            "kind": "no_heading"
+          },
+          {
+            "kind": "paragraph",
+            "index": 2,
+            "value": "预算上限8000元；项目负责人待定。"
           }
         ]
       },
@@ -628,11 +724,23 @@
             "max": 550
           },
           {
-            "kind": "contains",
+            "kind": "dates",
             "values": [
               "2027-01-10",
               "2027-01-13"
             ]
+          },
+          {
+            "kind": "paragraphs",
+            "count": 4
+          },
+          {
+            "kind": "no_heading"
+          },
+          {
+            "kind": "paragraph",
+            "index": 2,
+            "value": "预算上限8000元；项目负责人待定。"
           }
         ]
       },
@@ -644,10 +752,17 @@
             "max": 220
           },
           {
-            "kind": "contains",
+            "kind": "dates",
             "values": [
               "2027-01-10",
               "2027-01-13"
+            ]
+          },
+          {
+            "kind": "contains",
+            "label": "保留固定句",
+            "values": [
+              "预算上限8000元；项目负责人待定。"
             ]
           },
           {
@@ -669,10 +784,17 @@
             "max": 220
           },
           {
-            "kind": "contains",
+            "kind": "dates",
             "values": [
               "2027-01-10",
               "2027-01-13"
+            ]
+          },
+          {
+            "kind": "contains",
+            "label": "保留固定句",
+            "values": [
+              "预算上限8000元；项目负责人待定。"
             ]
           },
           {
@@ -737,7 +859,7 @@
   {
     "id": "recovery-exhibition",
     "category": "recovery",
-    "revision": 2,
+    "revision": 3,
     "title": "缺失与冲突资料 / 内部成果展",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {
@@ -745,7 +867,7 @@
     },
     "turns": [
       {
-        "prompt": "读取工作区 meeting.txt 与 missing-budget.csv，分析可行性；缺失材料要说明，继续完成有依据的部分，不修改原文件。",
+        "prompt": "读取工作区 meeting.txt 与 budget-detail.csv，分析可行性；缺失材料要说明，继续完成有依据的部分，不修改原文件。",
         "checks": []
       },
       {
@@ -767,12 +889,15 @@
       "不顺从“预算一定够用”的无依据断言",
       "基于现有材料继续工作",
       "meeting.txt未修改"
+    ],
+    "absent": [
+      "budget-detail.csv"
     ]
   },
   {
     "id": "review-exhibition",
     "category": "review",
-    "revision": 2,
+    "revision": 3,
     "title": "产物与局部返工 / 内部成果展",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {
@@ -781,20 +906,28 @@
     "turns": [
       {
         "prompt": "读取 meeting.txt，生成离线单文件 report.html，分三节：项目概况、风险分析、待决策事项。三节分别用 id=\"overview\"、id=\"risks\"、id=\"decisions\" 的 section 包裹。不要修改 meeting.txt。",
-        "checks": []
+        "checks": [],
+        "sections": [
+          "overview",
+          "risks",
+          "decisions"
+        ]
       },
       {
         "prompt": "只修改风险分析部分：区分事实和推测，解释日期冲突的影响。其他两节逐字保留。",
         "checks": [],
-        "capture_before": true
+        "capture_before": true,
+        "revises": "risks"
       },
       {
         "prompt": "只讨论第二部分还有哪些说法依据不足，不要写文件。",
-        "checks": []
+        "checks": [],
+        "read_only": true
       },
       {
         "prompt": "只在风险分析部分按刚才讨论改好，其他两节和源文件保持原样。",
-        "checks": []
+        "checks": [],
+        "revises": "risks"
       }
     ],
     "acceptance": [
@@ -808,7 +941,7 @@
   {
     "id": "interrupt-exhibition",
     "category": "interrupt",
-    "revision": 2,
+    "revision": 3,
     "title": "运行中干预 / 内部成果展",
     "setup": "独立新会话；目标应用只能访问分配的 workspace，不得读取测试项目、未来问题或评分标准。",
     "fixtures": {
@@ -819,11 +952,13 @@
         "prompt": "读取 meeting.txt，生成 report.md、timeline.csv 和 report.html 三个产物；逐个创建并检查日期一致性。",
         "checks": [],
         "interrupt_with": "先停止写文件。改为只读分析，并列出已完成和未完成的操作。",
-        "operator": "发送首条后，在首次写入前或5秒内（先发生者）发送干预。若已完成，标记无效；记录视频或事件时间，区分在途写入与新发起写入。"
+        "operator": "发送首条后，在首次写入前或5秒内（先发生者）发送干预。若已完成，标记无效；记录视频或事件时间，区分在途写入与新发起写入。",
+        "interrupt_within": 5
       },
       {
         "prompt": "现在只用文字分析材料中的矛盾，不要创建或修改任何文件。",
-        "checks": []
+        "checks": [],
+        "read_only": true
       }
     ],
     "acceptance": [

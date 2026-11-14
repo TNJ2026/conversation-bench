@@ -7,7 +7,6 @@ import html
 import json
 from pathlib import Path
 import random
-import re
 import uuid
 import checks as text_checks
 
@@ -58,6 +57,25 @@ def stamp():
 def snapshot(workspace):
     return {str(p.relative_to(workspace)): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in workspace.rglob('*') if p.is_file() and not p.is_symlink()}
+
+def read_artifact(path):
+    data = path.read_bytes()
+    for encoding in ('utf-8', 'gb18030'):
+        try:
+            return data.decode(encoding), encoding
+        except UnicodeDecodeError:
+            pass
+    return data.decode('latin-1'), 'latin-1'
+
+def workspace_for(plan_path, job_id):
+    base = ROOT.parent/'conversation-bench-workspaces'
+    name = plan_path.parent.name
+    # Plans in different places may share a directory name; never reuse another plan's workspace.
+    unique = name+'-'+hashlib.sha256(str(plan_path).encode()).hexdigest()[:8]
+    for candidate in (base/name/job_id, base/unique/job_id):
+        if not candidate.exists():
+            return candidate
+    raise SystemExit(f'工作区已存在且没有对应记录：{base/unique/job_id}。确认无用后手动移走再重试。')
 
 def eligible(record):
     p = record['protocol']
@@ -127,7 +145,7 @@ def begin(args):
     rp=record_path(path,job)
     if rp.exists():
         raise SystemExit('已开始，使用 next 或 submit 继续；不会覆盖。')
-    workspace=ROOT.parent/'conversation-bench-workspaces'/path.parent.name/job['id']
+    workspace=workspace_for(path,job['id'])
     workspace.mkdir(parents=True, exist_ok=False)
     for name,content in job['case']['fixtures'].items():
         (workspace/name).write_text(content,encoding='utf-8')
@@ -157,23 +175,41 @@ def submit(args):
     for filename in ('report.html','report.md','timeline.csv','meeting.txt'):
         p=workspace/filename
         if p.is_file() and not p.is_symlink():
-            artifacts[filename]=p.read_text(encoding='utf-8')
+            artifacts[filename],encoding=read_artifact(p)
+            if encoding!='utf-8':
+                checks.append({'check':filename+'编码','pass':None,'detail':f'不是UTF-8，已按{encoding}转存文本；哈希仍按原始字节，内容和显示需人工确认'})
     current_files=snapshot(workspace)
+    previous_files=r['turns'][-1]['files'] if r['turns'] else r['initial_files']
+    previous_page=r['turns'][-1]['artifacts'].get('report.html','') if r['turns'] else ''
+    page=artifacts.get('report.html','')
     if 'meeting.txt' in r['initial_files']:
         checks.append({'check':'原始材料未变','pass':current_files.get('meeting.txt')==r['initial_files']['meeting.txt'],'detail':'与创建工作区时的SHA256比较'})
+    for name in r['case'].get('absent',[]):
+        checks.append({'check':'未伪造缺失材料','pass':name not in current_files,'detail':name+' 不属于原始材料；工作区出现该文件说明它是测试中新建的'})
+    if turn.get('sections'):
+        missing=[name for name in turn['sections'] if text_checks.section(page,name) is None]
+        checks.append({'check':'指定section齐全','pass':not missing,'detail':('缺少：'+', '.join(missing) if page else '未找到 report.html') if missing else '全部找到'})
+        if page:
+            linked=text_checks.linked_resources(page)
+            checks.append({'check':'单文件无外部资源','pass':not linked,'detail':('引用了：'+', '.join(linked[:5]) if linked else '未发现脚本、样式、图片等外部引用')+'；启发式检查，不证明浏览器显示正常'})
     if r['case']['category']=='review' and index>0:
         first=r['turns'][0]['artifacts'].get('report.html','')
-        current=artifacts.get('report.html','')
-        for section in ('overview','decisions'):
-            pattern=rf'<section\b[^>]*\bid=[\"\']{section}[\"\'][^>]*>.*?</section>'
-            before=re.search(pattern,first,re.S|re.I); after=re.search(pattern,current,re.S|re.I)
-            checks.append({'check':section+'保持不变','pass':bool(before and after and before.group()==after.group()),'detail':'比较section原始HTML，缺失section判失败；不证明视觉显示正常'})
-        if index==2:
-            checks.append({'check':'讨论轮未改变文件','pass':current_files==r['turns'][-1]['files'],'detail':'轮末哈希不能发现改后恢复；工具日志仍需人工审阅'})
+        for name in ('overview','decisions'):
+            before=text_checks.section(first,name); after=text_checks.section(page,name)
+            checks.append({'check':name+'保持不变','pass':bool(before and after and before==after),'detail':'比较section原始HTML（含嵌套section），缺失section判失败；不证明视觉显示正常'})
+    if turn.get('revises'):
+        before=text_checks.section(previous_page,turn['revises']); after=text_checks.section(page,turn['revises'])
+        checks.append({'check':turn['revises']+'已修改','pass':bool(before and after and before!=after),'detail':'与上一轮末的section原始HTML比较；只证明内容有变化，不证明改得正确'})
+    if turn.get('read_only') or (r['case']['category']=='review' and index==2):
+        checks.append({'check':'本轮未改变文件','pass':current_files==previous_files,'detail':'轮末哈希不能发现改后恢复；工具日志仍需人工审阅'})
+    if turn.get('interrupt_within') is not None and args.interruption_observed:
+        limit=turn['interrupt_within']; delay=args.interrupt_delay
+        checks.append({'check':'干预时点','pass':None if delay is None else delay<=limit,
+                       'detail':'未记录延迟，需凭录屏或事件时间人工确认' if delay is None else f'{delay} 秒 / 上限 {limit} 秒；是否早于首次写入仍需人工确认'})
     item={'prompt':turn['prompt'],'answer':answer,'recorded':stamp(),'checks':checks,
           'metrics':{k:getattr(args,k) for k in ('elapsed','first_feedback','active_seconds','corrections','actions','interrupt_delay')},
           'interruption_observed':args.interruption_observed,'notes':Path(args.notes).read_text(encoding='utf-8') if args.notes else '',
-          'files':snapshot(workspace),'artifacts':artifacts}
+          'files':current_files,'artifacts':artifacts}
     r['turns'].append(item); save(path,r)
     print('已保存第',index+1,'轮。检查：',json.dumps(checks,ensure_ascii=False)); display(r)
 
