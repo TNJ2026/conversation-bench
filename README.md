@@ -1,30 +1,38 @@
-# 桌面会话体验对照测试 v2
+# Desktop Conversation Experience Benchmark v2
 
-Python 3.9+，无第三方依赖。新版入口为 `study.py`。支持 DeepSeek Harness（`dsh`）、ChatGPT（`chatgpt`）和 Hermes（`hermes`）。包含六类场景，每类三个不同案例；默认两款应用共36次会话，也可单独测试一款（18次）或三款同题对照（54次）。提供逐轮提示、独立材料目录、产物快照、协议分组、对照报告和匿名文本评审导出。它是人工操作桌面应用的测试工具，不是模拟用户的自答脚本，也不自动点击应用或调用模型API。
+[English](README.md) | [中文](README.zh-CN.md)
 
-## 加入 Hermes
+A human-operated benchmark for comparing multi-turn conversations in DeepSeek Harness (`dsh`), ChatGPT (`chatgpt`), and Hermes (`hermes`). Requires Python 3.9 or later and uses only the standard library. The entry point is `study.py`.
 
-新建计划时用 `--products` 选择应用，逗号分隔；不填写时仍使用原来的 `dsh,chatgpt`，旧计划和历史记录无需修改。
+The suite contains 18 cases across six categories, with three project scenarios per category. The default two-app plan contains 36 conversations; a single-app plan contains 18, and a three-app plan contains 54. It provides prompts one turn at a time, separate material workspaces, artifact snapshots, protocol-aware comparison groups, reports, and anonymized text-review exports.
+
+An operator sends prompts to the actual desktop application and records the results. The tool does not click application controls, call model APIs, or simulate a user by answering its own questions. The supplied case prompts and command-line messages are currently in Chinese; this English README does not translate the benchmark itself.
+
+## Select applications
+
+Use `--products` when creating a plan. Provide a comma-separated list; the default remains `dsh,chatgpt`. Existing plans and records do not need to be changed.
 
 ```sh
-# 只测试 Hermes：18次会话
+# Hermes only: 18 conversations
 python3 study.py create --products hermes --output studies/hermes-desktop-1/plan.json
 python3 study.py next --plan studies/hermes-desktop-1/plan.json
-# DSH 与 Hermes 对照：36次会话
+# DSH and Hermes: 36 conversations
 python3 study.py create --products dsh,hermes --output studies/dsh-hermes/plan.json
-# 三款同题对照：54次会话
+# All three applications: 54 conversations
 python3 study.py create --products dsh,chatgpt,hermes --output studies/three-apps/plan.json
 ```
 
-计划已存在时直接运行 `next`，不要重复 `create`；工具不会覆盖已有计划。Hermes 同样使用下面的 `begin`、`submit`、`finish`、`report` 流程。每个案例在 Hermes 中新建独立会话，只绑定分配的材料目录，逐轮发送当前提示；记录实际模型、推理档位、权限与记忆设置。不要把完整用例或对方答案交给被测会话。运行中干预必须实际验证消息已发送给运行中的任务，不能把排队等候当作即时干预。
+If a plan already exists, run `next` instead of repeating `create`. The tool refuses to overwrite an existing plan. All applications use the same `begin`, `submit`, `finish`, and `report` workflow below.
 
-产品标签记录的是被测应用，不是模型名称。如果实际使用 Codex 或其他客户端，应在配置中明确记录，不把应用标签当作模型或客户端已经对齐的证明。
+Start a separate conversation for each case, associate it only with its assigned material workspace, and send only the current turn. Record the actual model, reasoning effort, permissions, plugins, and memory settings. Keep future prompts, acceptance criteria, and other applications' answers away from the target conversation. For interruption cases, verify that the intervention reaches the running task; a queued message does not establish an immediate interruption.
 
-## 从这里开始
+Product labels identify the application under test, not the model. If you actually use Codex or another client, record that explicitly. A product label does not establish that clients or models were matched.
 
-历史测试记录、过程材料和对比报告保存在项目之外的本地归档目录，不随源码上传。归档中的路径映射与校验清单用于追溯原始证据。
+## Get started
 
-以下以新计划 `studies/new-round/plan.json` 为例。在终端执行：
+Historical records, process evidence, and comparison reports are kept in a local archive outside this project and are not uploaded with the source. The archive's path mapping and checksum manifest support tracing the original evidence.
+
+Create a new plan, then inspect its next job:
 
 ```sh
 git clone https://github.com/TNJ2026/conversation-bench.git
@@ -33,25 +41,25 @@ python3 study.py create --output studies/new-round/plan.json
 python3 study.py next --plan studies/new-round/plan.json
 ```
 
-这会显示接下来该测试哪个应用、哪个案例和任务编号。按照输出，用真实编号和模型信息开始测试（下例 `J001` 仅为第一项）：
+The output identifies the application, case, and job to run next. Begin that job using its actual ID and configuration. `J001` below is only an example:
 
 ```sh
 python3 study.py begin --plan studies/new-round/plan.json --job J001 \
-  --model '填写实际模型及推理档位' --app-version '填写应用版本' \
-  --permissions '填写权限' --plugins '填写插件' --memory '填写记忆设置' \
+  --model 'actual model and reasoning effort' --app-version 'actual app version' \
+  --permissions 'actual permissions' --plugins 'actual plugins' --memory 'actual memory settings' \
   --method desktop --isolated --unexposed
 ```
 
-`--isolated` 声明使用独立新会话；`--unexposed` 声明目标未接触未来问题、验收标准及对方答案。只有实际做到才能填写。默认 `--method selftest`，避免把集中自答误认为正式测评。自测可保存但不会进入正式配对或匿名评审。
+`--isolated` declares that you used a separate new conversation. `--unexposed` declares that the target has not seen future prompts, acceptance criteria, or another application's answers. Supply these flags only when those conditions are actually met. The default method is `selftest`, so self-generated answers are not mistaken for formal desktop evaluations. Self-tests can be recorded but are excluded from formal comparison groups and anonymized reviews.
 
-**测试执行者与被测AI必须分离。** 终端由你或独立测试执行者操作；不要把本README、脚本或完整案例交给被测AI，也不要让它自行生成测试记录。每个目标会话只收到当前轮提示词及分配的工作区。脚本只逐轮显示提示，并不能阻止有全盘权限的AI读取案例，访问隔离需由操作员保证。
+**Keep the test operator separate from the AI under test.** You or an independent operator should control the terminal. Do not give the target this README, the scripts, or the complete case, and do not ask it to manufacture its own test records. Each target conversation receives only the current prompt and its assigned workspace. Showing one prompt at a time does not prevent an AI with full filesystem access from reading the case files; the operator must enforce access isolation.
 
-## 完成一轮
+## Record a turn
 
-1. `begin` 输出记录文件路径、目标工作区和第一轮提示。将目标应用绑定到该工作区，或告知该目录绝对路径。工作区位于相邻的 `conversation-bench-workspaces/`，仅含材料，不含用例和评分标准。
-2. 复制当前提示到目标应用，真实等待并观察。用秒表或屏幕录制记录反馈、完成和操作时间。
-3. 将回答正文单独保存为UTF-8文件，如 `/tmp/bench-answer.txt`。工具过程、额外追问、截图路径和异常另存 `/tmp/bench-notes.txt`。不要将工具日志混入字数核查正文。
-4. 录入本轮，脚本随即显示下一轮提示：
+1. `begin` prints the record path, assigned workspace, and first prompt. Bind the target application to that workspace or give it the absolute workspace path. Workspaces are created in the sibling `conversation-bench-workspaces/` directory and contain task materials, without the cases or scoring criteria.
+2. Send the current prompt to the target application and observe its actual behavior. Use a stopwatch or screen recording when measuring feedback, completion, and operator time.
+3. Save the complete answer text to a UTF-8 file, such as `/tmp/bench-answer.txt`. Store tool activity, additional follow-ups, screenshot paths, and anomalies separately in `/tmp/bench-notes.txt`. Keep tool logs out of the answer text used for character checks.
+4. Submit the turn. The tool then displays the next prompt:
 
 ```sh
 python3 study.py submit \
@@ -61,15 +69,15 @@ python3 study.py submit \
   --corrections 0 --actions 2
 ```
 
-数值仅为示例，必须替换为真实观测；未测量的参数直接省略，不能填0。时间单位为秒。`elapsed` 为发送至本轮结束，`first-feedback` 为首次有信息量的反馈，`active-seconds` 为人的操作耗时。`corrections` 不包括案例预定追问。相同记录第二次 submit 会写入下一轮，务必确认输出轮号，不重复提交同一答案。
+These numbers are examples; replace them with observations. Omit unmeasured metrics rather than entering zero. Times are in seconds: `elapsed` runs from sending the prompt to the end of the turn, `first-feedback` measures the first informative response, and `active-seconds` measures the human operator's active time. `corrections` excludes the case's planned follow-up prompts.
 
-暂时退出后，运行 `next --plan ...` 显示尚未提交的当前轮。每次提交原子保存；已提交内容不重跑、不覆盖。
+A second `submit` writes the next turn of the same record. Check the displayed turn number and do not submit the same answer twice. To resume after a pause, run `next --plan ...` to display the current unsubmitted turn. Each submission is saved atomically; already submitted turns are not rerun or overwritten.
 
-## 中途干预案例
+## Interruption cases
 
-这类案例第一步会同时给操作员“开始任务”和“干预”两条指令。它们必须在桌面应用里实时发送：任务仍运行时，在首次写入前或5秒内（先发生者）发送停止指令。若先前任务已完成，本次干预实验无效，不要假装发生过打断。
+The first step of an interruption case gives the operator both a task prompt and an intervention. Send them in the actual application while the original task is still running. Send the intervention before the first write or within five seconds of starting, whichever comes first. If the task has already finished, the interruption trial is invalid.
 
-把两条消息对应的响应按顺序一起写入首轮回答文件。备注记录发送干预、应用确认干预、后续调用和写入时点；区分已经在执行的写入完成与收到干预后新发起写入。
+Save both responses, in order, in the first turn's answer file. In the notes, record when the intervention was sent, when the application acknowledged it, and when subsequent tool calls or writes occurred. Distinguish an in-flight write finishing from a new write initiated after the intervention.
 
 ```sh
 python3 study.py submit --record studies/new-round/records/J001.json \
@@ -77,21 +85,21 @@ python3 study.py submit --record studies/new-round/records/J001.json \
   --interruption-observed --interrupt-delay 1.5
 ```
 
-`--interruption-observed` 只在实际观察到运行中干预时提供；延迟只在能够测量时填写。没有该观察，脚本拒绝将干预案例标为有效。
+Supply `--interruption-observed` only when you actually observed an intervention during the running task. Record the delay only when measured. Without that observation, the tool refuses to mark an interruption case as valid.
 
-## 完成会话与评分
+## Finish and score a conversation
 
-所有轮次结束后生成评分模板：
+After recording all turns, generate a scoring template:
 
 ```sh
 python3 study.py finish --record studies/new-round/records/J001.json
 ```
 
-编辑生成的 `J001-scores.json`：
+Edit the generated `J001-scores.json`:
 
-- `valid`：真实逐轮、材料正确、没有未来题目泄露则设 `true`；协议失效设 `false` 并填 `invalid_reason`。任务做得差或失败不等于测试无效。
-- `acceptance[].pass`：`true` / `false` / `null`（未评），已评分项必须在 `evidence` 给出原文、文件或具体行为依据。
-- `clarity`、`cooperation`：1–5 或 `null`。1=严重阻碍，2=多次困惑/纠正，3=完成但有摩擦，4=少量摩擦，5=清楚且无需额外纠正；在 `summary` 写具体理由。
+- `valid`: set to `true` when the conversation was run turn by turn with the correct materials and no future-prompt leakage. Set to `false` for a protocol violation and explain it in `invalid_reason`. Poor performance or a failed task does not by itself invalidate the test.
+- `acceptance[].pass`: `true`, `false`, or `null` for an unassessed item. Every assessed item needs a supporting quotation, file reference, or specific observed behavior in `evidence`.
+- `clarity` and `cooperation`: integers from 1 to 5, or `null`. Anchors: 1 = severe obstruction; 2 = repeated confusion or correction; 3 = completion with friction; 4 = minor friction; 5 = clear interaction without extra correction. Explain the observations in `summary`.
 
 ```sh
 python3 study.py finish --record studies/new-round/records/J001.json \
@@ -99,16 +107,16 @@ python3 study.py finish --record studies/new-round/records/J001.json \
 python3 study.py next --plan studies/new-round/plan.json
 ```
 
-任务失败导致不能继续时可提前结案，附上失败证据：
+If a task fails and cannot continue, close it early with failure evidence:
 
 ```sh
 python3 study.py finish --record studies/new-round/records/J001.json \
   --scores studies/new-round/records/J001-scores.json --outcome failed
 ```
 
-失败不会从配对中排除，无效测试则单列。结案记录不可再次覆盖，复测建新计划。
+Valid failures remain in comparisons; invalid trials are listed separately. Closed records cannot be overwritten. Create a new plan for a retest.
 
-## 报告与匿名评审
+## Reports and anonymized review
 
 ```sh
 python3 study.py report --plan studies/new-round/plan.json
@@ -116,44 +124,50 @@ open studies/new-round/report.html
 python3 study.py blind --plan studies/new-round/plan.json
 ```
 
-报告区分有效正式测试和自测/无效/待确认记录。仅在同一计划内、案例快照相同、重复编号相同、模式相同、**所选应用全部有效结案**时形成完整对照组。三方计划缺少任一方时，不会把剩余两方算作完整三方对照；有效的失败会话仍可进入对照。单应用计划只记录结果，不形成跨应用对照，也不导出匿名对照评审。旧版计划未保存应用列表时，从其任务列表读取参与应用，不改动旧计划。
+`open` is a macOS command; on other systems, open the HTML file in a browser.
 
-模型名称和配置保留，controlled 标签不证明模型实际相同。每轮耗时、操作负担、检查结果和文件快照位于证据详情。不把多个约束检查当作独立样本，也不生成总排名。
+Reports separate valid formal trials from self-tests, invalid trials, and records awaiting confirmation. A complete comparison group requires the same plan, case snapshot, repeat number, and mode, with **all selected applications closed as valid trials**. In a three-app plan, two completed applications do not form a complete three-app group. Valid failed conversations can still be included. Single-app plans record results without cross-app comparisons or anonymized comparative exports. For older V2 plans without a saved application list, the tool derives participants from the jobs without rewriting the plan.
 
-匿名导出目录仅包含提示、回答、随机标签及评分模板：两方使用A/B，三方使用A/B/C，去除产品标签和配置。身份映射另存在计划目录的 `KEY-DO-NOT-SHARE` 文件，绝不交给评审者。回答本身可能提及产品或路径，分享前检查，不保证完全匿名。评分模板供人工填写和留存，当前不自动导入主报告。
+Model names and configuration remain visible in reports. A `controlled` label does not prove that the actual models match. Per-turn timing, operator effort, checks, and artifact snapshots appear in the evidence details. Multiple constraint checks are not independent samples, and the tool does not produce an overall ranking.
 
-盲评三项各1–5分：事实准确性（无依据陈述越多分越低）、指令遵守（遗漏或擅改越多分越低）、实用性（是否可直接使用、后续行动是否清楚）。保留原文证据；桌面操作体验单独评分，不从文字推断。
+Anonymized exports contain prompts, answers, randomized labels, and a scoring template. Two-app groups use A/B; three-app groups use A/B/C. Product labels and configuration are removed, while the identity mapping is saved separately in a `KEY-DO-NOT-SHARE` file under the plan directory. Never give that mapping to reviewers. Answers may themselves reveal product names or paths, so inspect exports before sharing; complete anonymity is not guaranteed. Review templates are filled in and retained separately and are not automatically imported into the main report.
 
-## 追加测试计划
+Text reviews use three 1–5 dimensions: factual accuracy, instruction following, and usefulness. Unsupported claims reduce factual accuracy; omissions and unauthorized changes reduce instruction following; usefulness concerns whether the answer can be used and whether next steps are clear. Retain source evidence. Score desktop interaction separately rather than inferring it from answer text.
+
+## Additional plans and retests
 
 ```sh
 python3 study.py list
-# 全部18案例，每款应用各一次：36次会话
+# All 18 cases, once per default application: 36 conversations
 python3 study.py create --output studies/another-round/plan.json --seed 73
-# 只复测出现差异的案例，每款应用追加两次
+# Retest two cases, twice per default application
 python3 study.py create --cases revision-knowledge,context-training \
   --repeat 2 --output studies/focused-retest/plan.json
-# 仅复测 Hermes 的这两个案例，各两次：4次会话
+# Hermes only, two cases repeated twice: 4 conversations
 python3 study.py create --products hermes --cases revision-knowledge,context-training \
   --repeat 2 --output studies/hermes-retest/plan.json
 ```
 
-计划固定案例快照并随机化案例顺序。两款应用保留原来的交替顺序，三款应用轮换先后顺序；`seed` 可复现顺序。应用选择与顺序写入计划，不接受重复或未知应用。默认模式是实际日常配置；`--mode controlled` 用于你手动对齐配置后的测试。文件材料副本按计划与任务独立创建，不复用已有工作区。
+Plans freeze their case snapshots and randomize case order. Two-app plans retain the alternating order; three-app plans rotate application order. `--seed` makes the ordering reproducible. Selected applications and their order are saved in the plan; duplicate and unknown applications are rejected. The default mode records everyday settings. Use `--mode controlled` after manually matching configuration. Each job gets its own material copy and workspace; an existing workspace is not reused.
 
-## 检查范围与已知限制
+## Checks and limitations
 
-文本检查包含指定字符串、非空白字符上下限和空行划分的段落原样保留。字符数含标点和Markdown。新的压缩案例先要求450–550字符，再压至220；最终轮不重复关键约束。首稿过短应记为未达成，不将后续“低于220”误判成压缩成功。
+Text checks cover required strings, minimum and maximum non-whitespace character counts, and verbatim preservation of paragraphs identified by blank lines. Counts include punctuation and Markdown. The short-text revision cases require 450–550 characters before shortening to 220; the final turn does not restate the key constraints. An initial draft that is too short fails the initial requirement; a later answer below 220 characters does not by itself demonstrate successful shortening.
 
-文件返工自动保存每轮HTML、Markdown、CSV和原材料内容，校验原材料哈希及指定section原文；讨论轮比较文件哈希。哈希无法发现改后恢复，也不能证明浏览器实际预览成功。实际预览、工具过程和运行中停止仍需人工证据。文件及截图可能包含个人信息，分享前审阅。
+Artifact-review cases save HTML, Markdown, CSV, and source-material snapshots after each turn. They check the source file's hash and specified HTML sections verbatim; discussion-only turns compare file hashes. Hashes cannot detect a file being changed and then restored, or establish that a browser preview rendered correctly. Preview behavior, tool activity, and live interruption still require operator evidence. Files and screenshots may contain personal information; inspect them before sharing.
 
-案例位于 `cases-v2.json`；`suite.py` 可重新生成内置v2案例，但会覆盖对该文件的手工修改。文本约束检查由 `checks.py` 提供。
+The short-conversation catalog is `cases-v2.json`. Running `suite.py` regenerates the built-in V2 cases and overwrites manual edits to that file. `checks.py` provides the text-constraint checks.
 
-## 项目自检
+## Long-context compaction comparison
 
-新增的[长会话压缩前后对照案例](docs/long-context-compaction-qinglu.md)采用共同检查点分支、真实压缩证据、闭卷回忆与只读查回两阶段。完整提示和记录模板见 `cases/long-context-compaction-qinglu.json`。它是独立操作员协议，尚未接入 `study.py`，不计入上述18个短会话案例。
+The separate [long-context compaction case](docs/long-context-compaction-qinglu.md) uses branches from a shared checkpoint, evidence of actual context compaction, and two probe stages: closed-book recall and read-only retrieval. Complete prompts and a record template are in [the case JSON](cases/long-context-compaction-qinglu.json). Its instructions and prompts are currently in Chinese.
+
+This is a separate operator protocol, is not yet integrated into `study.py`, and is not included in the 18 short-conversation cases. Generating the case does not constitute a completed compaction test or a measured result.
+
+## Run the project checks
 
 ```sh
 python3 -m unittest -v
 ```
 
-自检只使用临时数据，不制造产品测评结果。覆盖字数上下限、案例数量、应用选择与轮换、协议对照排除、失败保留、文件局部修改检查、逐轮保存、评分、HTML转义、双/三方匿名导出和旧计划兼容。
+Tests use temporary data and do not manufacture product-evaluation results. They cover character limits, case counts, application selection and ordering, protocol exclusions, retention of valid failures, local file changes, per-turn recording, scoring, HTML escaping, two- and three-app anonymized exports, and compatibility with older V2 plans.
