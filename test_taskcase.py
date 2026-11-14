@@ -35,8 +35,7 @@ class TaskCaseTests(unittest.TestCase):
                        f'QL-E017：回执码为 {code}',f'QL-E017：回执码是 {code}',
                        f'QL-E017：回执码 *{code}*',f'QL-E017：回执码 _{code}_',
                        f'QL-E017：回执码（{code}）',f'QL-E017：回执码[{code}]',
-                       f'QL-E017：回执码【{code}】',f'按格式：QL-E017：{code}',
-                       f'QL-E017：{code}_'):
+                       f'QL-E017：回执码【{code}】',f'按格式：QL-E017：{code}'):
             with self.subTest(answer=answer):
                 self.assertTrue(longrun.receipt_pair_matches(spec,code,answer))
         for answer in ('QL-E017：回执码','QL-E017：<回执码原文>','QL-E017：无法确认',
@@ -45,6 +44,7 @@ class TaskCaseTests(unittest.TestCase):
                        'QL-E017：0000000000000000',
                        f'QL-E017：{code}\nQL-E017：0000000000000000',
                        f'QL-E017：{code.upper()}',
+                       f'QL-E017：{code}_',
                        f'回答：无法确认（格式示例：QL-E017：{code}）',
                        f'例如 QL-E017：{code}',f'引用：QL-E017：{code}'):
             with self.subTest(answer=answer):
@@ -55,6 +55,42 @@ class TaskCaseTests(unittest.TestCase):
         legacy=taskcase.build_task_case()['probe_anchors']['receipt']
         self.assertFalse(longrun.receipt_pair_matches(legacy,code,f'QL-E017：回执码 {code}'))
         self.assertTrue(longrun.receipt_pair_matches(legacy,code,f'QL-E017：{code}'))
+
+    def test_formatting_does_not_repair_corrupted_identifiers_or_receipts(self):
+        spec=taskcase.build_fixed_task_case()['probe_anchors']['receipt']
+        code=taskcase.RECEIPT
+        for char in ('_','*','`','**','__'):
+            for answer in (f'QL-E017：{code[:8]}{char}{code[8:]}',
+                           f'QL-E017：{code[:4]}{char}{code[4:8]}{char}{code[8:]}',
+                           f'QL-E0{char}17：{code}'):
+                with self.subTest(answer=answer):
+                    self.assertFalse(longrun.receipt_pair_matches(spec,code,answer))
+        for marker in ('*','**','_','__','`','``'):
+            self.assertTrue(longrun.receipt_pair_matches(
+                spec,code,f'{marker}QL-E017{marker}：{marker}{code}{marker}'))
+
+    def test_all_actual_values_are_checked_even_when_malformed(self):
+        spec=taskcase.build_fixed_task_case()['probe_anchors']['receipt']
+        code=taskcase.RECEIPT
+        for wrong in ('0'*15,'0'*17,'xyz','无法确认','回执码','<回执码原文>',
+                      code[:8]+'_'+code[8:],f'（{code}0）'):
+            for separator in ('\n','；'):
+                answer=f'QL-E017：{code}{separator}QL-E017：{wrong}'
+                with self.subTest(answer=answer):
+                    self.assertFalse(longrun.receipt_pair_matches(spec,code,answer))
+
+    def test_multiline_examples_cannot_supply_an_actual_answer(self):
+        spec=taskcase.build_fixed_task_case()['probe_anchors']['receipt']
+        code=taskcase.RECEIPT
+        for heading in ('示例：','### 示例','引用：','Example:'):
+            for content in (f'QL-E017：{code}',f'\nQL-E017：{code}\n',
+                            f'```text\nQL-E017：{code}\n```'):
+                answer=f'{heading}\n{content}\n实际答案：无法确认'
+                with self.subTest(answer=answer):
+                    self.assertFalse(longrun.receipt_pair_matches(spec,code,answer))
+        self.assertFalse(longrun.receipt_pair_matches(spec,code,f'> QL-E017：{code}'))
+        self.assertTrue(longrun.receipt_pair_matches(
+            spec,code,f'示例：\nQL-E017：00000000000000000\n\n实际答案：\nQL-E017：{code}'))
 
     def test_unknown_match_mode_is_rejected_before_run(self):
         case=taskcase.build_fixed_task_case()

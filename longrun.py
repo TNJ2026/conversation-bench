@@ -330,23 +330,57 @@ def task_outcomes(case, anchors, protocol_valid):
             'task_protocol_eligible':protocol_valid}
 
 
+def receipt_display_text(line):
+    """Unwrap paired emphasis at field boundaries, never repair token contents."""
+    emphasis = re.compile(
+        r'(?<![A-Za-z0-9])(?P<mark>\*\*|__|`{1,3}|\*|_)'
+        r'(?=\S)(?P<body>.*?\S)(?P=mark)(?![A-Za-z0-9])')
+    while True:
+        unwrapped = emphasis.sub(lambda m:m['body'],line)
+        if unwrapped == line:
+            return line
+        line = unwrapped
+
+
+def receipt_assertions(spec, answer):
+    """Collect every actual assertion, including malformed and conflicting values."""
+    ticket = re.compile(r'(?<![A-Za-z0-9_-])'+re.escape(spec['ticket'])+
+                        r'(?![A-Za-z0-9_-])[ \t]*[:：][ \t]*')
+    example = re.compile(r'示例|例如|比如|引用|e\.g\.|example',re.I)
+    actual = re.compile(r'^(?:#{1,6}[ \t]*)?(?:实际答案|正式答案|我的答案|最终答案|答案|回答|核对结果)[ \t]*(?:[:：]|$)')
+    label = re.compile(r'^回执码(?:[ \t]*(?:为|是))?[ \t]*[:：]?[ \t]*')
+    brackets = {'（':'）','(':')','[':']','【':'】'}
+    example_block = False
+    values = []
+    for raw in answer.splitlines():
+        line = receipt_display_text(raw.strip())
+        if actual.match(line):
+            example_block = False
+        matches = list(ticket.finditer(line))
+        # A standalone example heading scopes following lines until an explicit
+        # answer heading. Blank lines do not turn example content into an answer.
+        if not matches and example.search(line):
+            example_block = True
+        if example_block or line.startswith('>'):
+            continue
+        for index,match in enumerate(matches):
+            if example.search(line[:match.start()]):
+                continue
+            end = matches[index+1].start() if index+1 < len(matches) else len(line)
+            body = label.sub('',line[match.end():end],count=1).strip()
+            if body[:1] in brackets:
+                close = body.find(brackets[body[0]],1)
+                value = body[1:close] if close >= 0 else None
+            else:
+                token = re.match(r'[^\s,，;；。:：()（）\[\]【】]+',body)
+                value = token[0] if token else None
+            values.append(value)
+    return values
+
+
 def receipt_pair_matches(spec, expected, answer):
     if spec.get('match_mode') == 'labelled-receipt-line-v1':
-        # Same-line association matters; emphasis, bracket wrapping, and an
-        # explicit field label (including 回执码为/是) do not. A code that only
-        # appears after an example/quote marker is not the actual answer.
-        text = answer.replace('*','').replace('`','').replace('_','')
-        pattern = (r'(?<![A-Za-z0-9_-])'+re.escape(spec['ticket'])+
-                   r'(?![A-Za-z0-9_-])[ \t]*[:：][ \t]*'
-                   r'(?:回执码(?:[ \t]*(?:为|是))?[ \t]*[:：]?[ \t]*)?'
-                   r'[（(\[【]?([A-Za-z0-9]{16})[）)\]】]?(?![A-Za-z0-9_])')
-        example = re.compile(r'示例|例如|比如|引用|e\.g\.|example', re.I)
-        values = []
-        for match in re.finditer(pattern,text):
-            line_start = text.rfind('\n',0,match.start())+1
-            if example.search(text[line_start:match.start()]):
-                continue
-            values.append(match.group(1))
+        values = receipt_assertions(spec,answer)
         return bool(values) and all(value == expected for value in values)
     if spec.get('match_mode') is not None:
         raise ValueError('Unsupported receipt match mode: '+str(spec['match_mode']))
