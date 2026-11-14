@@ -4,7 +4,11 @@
 
 ## 实际执行方式
 
-运行器使用本机 DSH CLI 的 `sdk` profile，通过标准输入输出上的 JSON-RPC 发送真实提示并等待结束，不调用当前评测助手来模拟目标回答，也不自动点击桌面应用。其结果应标记为 `dsh-sdk`，不能冒充 DSH 桌面 UI 实测或与此前桌面配置已经对齐的实验。
+运行器默认使用本机 DSH CLI 的 `sdk` profile，通过标准输入输出上的 JSON-RPC 发送真实提示并等待结束，不调用当前评测助手来模拟目标回答，也不自动点击桌面应用。其结果标记为 `dsh-sdk`，不能冒充 DSH 桌面 UI 实测或与此前桌面配置已经对齐的实验。
+
+`--transport web` 改用同一安装随附的浏览器运行时：在独立 `DSH_HOME` 中以 `--profile web --no-open --port 0` 启动，读取启动时打印的 token 换取会话 cookie，再通过本地 `/api` 的 `client-request` 信封调用 `session/create`、`session/prompt`、`session/wait`、`session/events` 与 `commands/execute`；斜杠命令必须走 `commands/execute`，不能当作普通提示发送。历史超过一页时按 `beforeSeq` 向前翻页，直到覆盖本动作开始前的游标。结果标记为 `dsh-web-host`，仍不是桌面窗口实测：`--profile desktop` 由 Electron 应用独占，CLI 启动会被拒绝。`--transport web` 的实例运行在 `sandbox-exec` 外层边界里：默认放行，但拒绝读/写 `docs/`、`cases/`、`README*`、`~/.dsh`、`~/Library/Application Support/@deepseek-ai`、下载目录、`/private/tmp`，以及 `studies/` 下除本次运行外的历史目录。外层边界已覆盖隔离，因此子进程设置 `DSH_PERMISSION_MODE=danger-full-access` 关闭 DSH 自带的嵌套沙箱；否则内层 `sandbox-exec` 无法在沙箱内启动，目标连自己的会话日志都读不到，查回阶段失去意义。改动边界后应先用一次 `cat` 答案文档的探针确认返回拒绝。
+
+该运行时公开的模型是 `deepseek-flash`（V4.1-Flash，effort off/low/high/max），与 SDK profile 的 `deepseek-v4-flash` 不同，两组数值不可直接比较。
 
 需要支持 `initialize`、`session/query`、`session/resume`、`shutdown` 与原生 `/compact` 的 DSH CLI。提供启动环境中的模型凭据；运行器不读取或复制日常 `~/.dsh` 的凭据。测试环境由独立的 `DSH_HOME` 管理，SDK profile 按 DSH 的原生机制初始化，模型和推理档位在创建时固定。可用 `--app-version` 记录实际 DSH 版本；握手中的 `serverInfo.version` 只是 SDK 服务版本，不能替代应用版本。若原接口不兼容、凭据不可用或目标请求人类输入，应保留日志并处理失败，不将它们转成虚构成功。
 

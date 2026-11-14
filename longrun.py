@@ -13,6 +13,7 @@ import uuid
 import longcase
 import checks as text_checks
 from dsh_driver import DriverError, DshDriver, text_content
+from webhost_driver import WebHostDriver
 
 BRANCHES = ('A', 'A_repeat', 'B')
 GRADES = ('correct', 'partial', 'unknown', 'wrong')
@@ -76,9 +77,12 @@ def create(args):
     pressure = case['pressure_turns'][:args.load_batches]
     if args.load_batches > len(pressure):
         pressure += longcase.batches(args.load_batches-len(pressure), first=len(pressure)+1)
-    state = {'version':1, 'id':identity, 'method':'dsh-sdk', 'case':case, 'case_hash':digest(case),
+    transport = getattr(args,'transport','sdk')
+    state = {'version':1, 'id':identity,
+             'method':'dsh-web-host' if transport == 'web' else 'dsh-sdk', 'case':case, 'case_hash':digest(case),
              'config':{'dsh_bin':args.dsh_bin, 'provider':args.provider, 'model':args.model,
-                       'effort':args.effort, 'timeout':args.timeout, 'profile':'sdk',
+                       'effort':args.effort, 'timeout':args.timeout,
+                       'profile':'web' if transport == 'web' else 'sdk', 'transport':transport,
                        'app_version':getattr(args,'app_version','unverified')},
              'workspace':str(workspace), 'initial_files':files(workspace),
              'prefix':case['seed_turns']+pressure, 'branch_order':order, 'results':{},
@@ -142,11 +146,22 @@ def checkpoint(path, state):
     save(path, state)
 
 
+def summary_text(value):
+    """DSH 0.1.x emitted a summary string; 0.2.x emits text content blocks."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return ''.join(block.get('text', '') for block in value
+                       if isinstance(block, dict) and block.get('type') == 'text')
+    return ''
+
+
 def compact_proof(events, seeds):
     """Require a summary and linked model-history replacement covering all seed messages."""
     for event in events:
         data = event.get('data', {})
-        if event.get('type') != 'compaction/summary' or not isinstance(data.get('summary'), str) or not data['summary'].strip():
+        text = summary_text(data.get('summary'))
+        if event.get('type') != 'compaction/summary' or not text.strip():
             continue
         covered = data.get('shadowedSeqs', [])
         if not set(seeds.values()).issubset(covered):
@@ -158,7 +173,7 @@ def compact_proof(events, seeds):
                     and all(isinstance(op.get(k), int) for k in ('startSeq','endSeq'))
                     and all(op['startSeq'] <= seq <= op['endSeq'] for seq in seeds.values())):
                 return {'summary_seq':event['seq'], 'replacement_seq':replacement['seq'],
-                        'covered_seed_sequences':dict(seeds), 'summary':data['summary']}
+                        'covered_seed_sequences':dict(seeds), 'summary':text}
     raise ValueError('No actual history replacement covers all three seed turns; compaction is unconfirmed.')
 
 
@@ -198,7 +213,8 @@ def run(path, max_actions=None, driver=None):
             raise ValueError('Previous target action has an uncertain outcome; inspect raw logs. Automatic resend is forbidden.')
         if state['status'] in ('invalid','attention','completed'):
             raise ValueError('This run is closed or needs investigation; it cannot be automatically continued.')
-        driver = driver or DshDriver(state['config'])
+        if driver is None:
+            driver = WebHostDriver(state['config']) if state['config'].get('transport') == 'web' else DshDriver(state['config'])
         done = 0
         while True:
             key, prompt = action(state)
@@ -335,7 +351,9 @@ def report(path):
               'elapsed_seconds':{b:sum(r['elapsed_seconds'] for k,r in state['results'].items() if k.startswith(b+'/')) for b in ('prefix',*BRANCHES)},
               'tokens':None,
               'conclusion_checks':state.get('conclusion_checks'),
-              'notice':'SDK-profile experiment, not a desktop-UI score. A single triplet does not establish a causal effect.'}
+              'notice':('Web-host runtime experiment (no native window), not a desktop-UI score. '
+                        if state['config'].get('transport') == 'web' else
+                        'SDK-profile experiment, not a desktop-UI score. ') + 'A single triplet does not establish a causal effect.'}
     rows = []
     metrics = state.get('metrics')
     if metrics:
@@ -374,6 +392,8 @@ def main(argv=None):
     c.add_argument('--app-version',default='unverified',help='Actual DSH app/CLI version; serverInfo.version is only the SDK protocol version')
     c.add_argument('--load-batches',type=positive,default=12); c.add_argument('--seed',type=int,default=42)
     c.add_argument('--timeout',type=positive,default=900)
+    c.add_argument('--transport',choices=('sdk','web'),default='sdk',
+                   help='sdk: stdio JSON-RPC; web: the shipped browser runtime over its local /api transport')
     for command in ('run','next','extend','grade','report'):
         p = sub.add_parser(command); p.add_argument('--record',required=True)
         if command == 'run': p.add_argument('--max-actions',type=positive)
