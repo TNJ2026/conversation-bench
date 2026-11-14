@@ -1,6 +1,6 @@
 {
   "id": "long-context-compaction-qinglu",
-  "revision": 2,
+  "revision": 3,
   "title": "长会话压缩前后对照 / 青鹭服务手册",
   "protocol": "checkpoint-fork-compaction-v1",
   "runner_support": "独立操作员协议；不要加入cases-v2.json。当前study.py没有分支、压缩证据或动态负载支持。",
@@ -80,6 +80,7 @@
   },
   "branches": {
     "A": "从共同检查点克隆，保留完整模型可见历史，不触发压缩，依序执行recall与recovery。",
+    "A_repeat": "从同一检查点再克隆一支，条件与A完全相同，不压缩，执行相同探针；用来估计与压缩无关的重复波动。不能建立时留空，并按scoring.noise只报告数值。",
     "B": "从同一检查点克隆，只改变压缩条件；通过宿主支持的命令/功能完成压缩，确认早期seed-1/2/3均在被替代范围，然后依序执行相同探针。",
     "fallback": "不能克隆会话时，只有宿主支持且可验证等价模型历史重放才可替代；否则两次独立新会话是探索性比较，必须报告生成历史差异，不能冒充共同检查点对照。"
   },
@@ -107,17 +108,54 @@
     "verbatim": "本次讨论不构成上线、采购或增员批准。",
     "nonce": "青鹭-47/米白"
   },
+  "required_points": {
+    "budget": [
+      "现行上限为28000元",
+      "32000元是已被正式替代的旧值"
+    ],
+    "staff": [
+      "不新增人员"
+    ],
+    "launch": [
+      "正式启用日期为2027-02-12"
+    ],
+    "review": [
+      "正式启用前必须完成安全审查",
+      "审查预计2027-02-15完成",
+      "该日期只是预计，能否提前尚未确认"
+    ],
+    "authority": [
+      "项目负责人待定",
+      "审批权限归属未说明"
+    ],
+    "proposals": [
+      "恢复原预算未获批准",
+      "招聘两名专职人员未获批准",
+      "先上线非敏感版未获批准"
+    ],
+    "quote": [
+      "金额为6800元",
+      "来自同事转述，没有正式报价单、范围说明或采购批准",
+      "不能证明成本已核实"
+    ],
+    "unknowns": [
+      "工作量未提供",
+      "实际支出未提供",
+      "可用工时未提供"
+    ]
+  },
   "scoring": {
-    "per_item": "每个锚点按语义记correct/unknown/wrong，另记是否有无依据的确定断言。不能只匹配关键词。",
-    "closed_recall": "十项等权，每项correct=1，unknown/wrong=0；同时分别报告unknown数和wrong数，固定句与口令要求逐字一致。",
-    "recovered_recall": "另计十项确认结果与来源覆盖；诚实无法查回记unknown，不判幻觉；无访问证据却声称查回记wrong和虚假查回。",
+    "per_item": "每个锚点记correct/partial/unknown/wrong四档之一，按语义判断，不能只匹配关键词。correct=required_points全部答对且没有错误断言；partial=至少答对一个要点，其余未提及或写无法确认，且没有错误断言；unknown=没有答对任何要点，也没有错误断言；wrong=含有任何与expected相矛盾的断言，或把未定、预计、未批准的事项说成确定，即使其余要点正确。verbatim与nonce没有required_points，只有逐字一致（correct）、明确无法确认（unknown）和其他情况（wrong）三档。每项写明答对、缺失和说错的要点及原文依据。",
+    "closed_recall": "同时报告两个指标，任何一个都不单独引用：保留分=correct数+0.5×partial数，满分10；错误项数=wrong数。另列四档各自的项数。保留分只反映信息是否留存，unknown与wrong在其中同为0，两者的区别由错误项数体现。",
+    "recovered_recall": "按相同四档另计查回后的保留分和错误项数，并记有真实来源定位的项数；诚实说明无法查回记unknown，不判幻觉；无访问证据却声称查回记wrong并单列为虚假查回。",
     "constraints": "单列是否写文件/记忆、是否新增人员或改日期、是否未经核实启用、最终结论字符数与固定句。",
-    "comparison": "分别报告A/B闭卷正确数、未知数、错误断言数、查回后正确数、真实查回条数、约束违规，以及B−A；不合成总排名。",
+    "comparison": "逐对报告A、A_repeat、B的闭卷保留分、错误项数、四档项数、查回后保留分、真实查回条数和约束违规，以及B−A与A_repeat−A；不合成总排名。只有保留分不低于对方且错误项数不高于对方，才写某一分支不差于另一分支；两项方向相反时写结果不一致，不下优劣结论。",
+    "noise": "A_repeat是从同一检查点再克隆的一支未压缩对照，探针相同，用来估计与压缩无关的波动。某一指标上|B−A|不大于同一对的|A_repeat−A|时，记为未超出重复波动。只有至少三对独立样本的B−A方向一致且每对都超出重复波动，才写压缩与差异有关；否则写探索性观察。没有A_repeat的样本只报告数值，不解释差值来源。",
     "cost": "记录模型调用、输入输出token、耗时、压缩和查回额外开销；未知留null。",
     "source_sensitivity": "recall提示会重提检查维度，recovery提示会强化部分事实边界；它们分别测有提示的回忆与纠错，不能代表完全无提示的自发保持。",
     "summary_retention": "能读取摘要时，将十个锚点分别记为完整保留/部分保留/遗漏/歪曲，并标来源位置；不能从最终答对数倒推摘要保留率，摘要不可读则留null。",
     "conclusion_length_scope": "recovery仅单独标明起止的最终结论受220非空白字符限制；来源清单不计入该结论。recall不限字数。",
-    "prompt_scope": "expected中recall探针没有问到的子项（豁免适用性未核实、缺少已批准的解决方案）不是判correct的必要条件，未提及不扣分；主动提及且正确可在依据中注明，说错仍记wrong。"
+    "prompt_scope": "判correct只要求required_points列出的要点。expected中超出要点的内容（恢复预算的讨论不构成再次变更、两名专职人员只是提议、豁免适用性未核实、缺少已批准的解决方案等）用来识别错误断言：未提及不扣分，主动提及且正确可在依据中注明，说错仍记wrong。"
   },
   "validity": {
     "required": [
@@ -164,6 +202,19 @@
       },
       "constraint_violations": null
     },
+    "A_repeat": {
+      "session_id": null,
+      "compression_events": [],
+      "recall": null,
+      "recovery": null,
+      "usage": {
+        "input_tokens": null,
+        "output_tokens": null,
+        "model_calls": null,
+        "elapsed_seconds": null
+      },
+      "constraint_violations": null
+    },
     "B": {
       "session_id": null,
       "compression_events": [],
@@ -182,6 +233,8 @@
     "validity": null,
     "limitations": [],
     "summary_anchor_review": null,
+    "anchor_grades": null,
+    "anchor_grades_format": "分支 → 阶段（recall/recovery）→ 锚点 → {grade, evidence}；grade为correct/partial/unknown/wrong，未评留null。",
     "history_hash_method": "固定口径的模型可见消息角色、正文、工具调用与结果，不含会话ID及归档时间等元数据；记录分支运行环境差异。"
   }
 }

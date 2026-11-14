@@ -12,6 +12,31 @@ import checks as text_checks
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_PRODUCTS = ('dsh', 'chatgpt')
+# Operator timing: reported on its own, never counted for or against the application.
+PROTOCOL_CHECKS = ('干预时点',)
+MIN_EVIDENCE = 6
+KEY_SUFFIX = '-KEY-DO-NOT-SHARE.json'
+RUBRIC = {
+    'clarity': '表达清晰度，只看应用怎么说：凭它的回复能否弄清做了什么、依据是什么、还有什么没做或不确定。'
+               '5=结果、依据、未完成项和不确定处都主动说明，无需追问；4=基本清楚，有一处需要追问或自行推断；'
+               '3=结论能看懂，但过程、依据或未完成项多处需要追问；2=多处含糊或前后矛盾，追问后才明白；'
+               '1=无法判断它做了什么，或说法与实际行为不符。',
+    'cooperation': '协作配合度，只看应用怎么做：是否按指令的范围和节奏行事。'
+                   '5=全程在指令范围内，无越权或遗漏，不需要案例预定之外的纠正；4=一次轻微偏离，提醒一次即改正；'
+                   '3=多次需要提醒，提醒后都能改正；2=提醒后仍重复偏离，或擅自做了未要求的操作；'
+                   '1=无视指令或纠正，无法推进。',
+    'note': '两项由知道应用身份的操作员给出，不是盲评。打分时在 clarity_evidence / cooperation_evidence 写具体事件；未观察到留null。'}
+BLIND_FIELDS = ('factuality', 'instruction_following', 'usefulness')
+BLIND_RUBRIC = {
+    'factuality': '事实准确性。5=所有陈述都有材料依据，推断均已标明；4=一处无依据的次要陈述或未标明的推断；'
+                  '3=多处次要陈述无依据，关键事实仍正确；2=至少一处关键事实错误，或把未定事项说成已定；'
+                  '1=多处关键事实错误或编造材料。',
+    'instruction_following': '指令遵守。5=每轮的明确要求全部满足；4=漏掉或偏离一项次要要求；'
+                             '3=漏掉多项次要要求，或一项关键要求只满足一部分；'
+                             '2=一项关键要求未满足，或擅自改动了要求保持不变的内容；1=多项关键要求未满足。',
+    'usefulness': '实用性。5=可直接使用，后续行动与待确认项明确；4=小幅修改即可使用；3=需要重组或补充后才能使用；'
+                  '2=只有零散内容可用；1=不可用或会误导决策。'}
+VERDICT = {True: '通过', False: '未通过', None: '未评'}
 
 def product_list(value):
     products = value.split(',') if isinstance(value, str) else list(value)
@@ -169,6 +194,8 @@ def submit(args):
     if not answer.strip():
         raise SystemExit('回答为空；未完成的失败可以直接 finish --outcome failed。')
     turn=r['case']['turns'][index]
+    if args.interruption_observed and 'interrupt_with' not in turn:
+        raise SystemExit('本轮没有预定干预，不要提供 --interruption-observed。')
     checks=text_checks.check(answer,turn.get('checks',[]),r['turns'])
     workspace=Path(r['workspace'])
     artifacts={}
@@ -215,7 +242,35 @@ def submit(args):
 
 def form(r):
     return {'valid':None,'invalid_reason':'','acceptance':[{'criterion':x,'pass':None,'evidence':''} for x in r['case']['acceptance']],
-            'clarity':None,'cooperation':None,'summary':'说明具体事件；未知留null。'}
+            'clarity':None,'clarity_evidence':'','cooperation':None,'cooperation_evidence':'',
+            'rubric':RUBRIC,'summary':'说明具体事件；未知留null。'}
+
+def written(value, minimum=MIN_EVIDENCE):
+    return isinstance(value,str) and len(''.join(value.split()))>=minimum
+
+def conflicts(case, turns, acceptance):
+    """Human passes that a linked automatic check contradicts; None when the snapshot predates the links."""
+    links=case.get('auto')
+    if links is None:
+        return None
+    return [f'“{x["criterion"]}”判通过，但第{number}轮自动检查“{c["check"]}”未通过'
+            for x in acceptance if x.get('pass') is True
+            for turn,name in links.get(x['criterion'],[])
+            for number,done in enumerate(turns,1) if turn in (None,number)
+            for c in done['checks'] if c['check']==name and c['pass'] is False]
+
+def interruption_problem(r):
+    """Why an interruption trial cannot count as valid, or None."""
+    for spec,done in zip(r['case']['turns'],r['turns']):
+        if 'interrupt_with' not in spec:
+            continue
+        if not done['interruption_observed']:
+            break
+        delay,limit=done['metrics']['interrupt_delay'],spec.get('interrupt_within')
+        if delay is not None and limit is not None and delay>limit:
+            return f'干预延迟 {delay} 秒超过上限 {limit} 秒，操作协议未满足，不能标为有效；请设 valid=false 并写明原因。'
+        return None
+    return '没有在预定轮次观察到运行中干预，不能标为有效。'
 
 def finish(args):
     path=Path(args.record).resolve(); r=load(path)
@@ -229,24 +284,36 @@ def finish(args):
     scores=load(args.scores)
     if type(scores.get('valid')) is not bool:
         raise SystemExit('valid 必须明确为 true 或 false；无效测试需填写原因。')
-    if not scores['valid'] and not scores.get('invalid_reason','').strip():
+    if not scores['valid'] and not written(scores.get('invalid_reason'),1):
         raise SystemExit('请记录测试无效原因。')
-    expected=r['case']['acceptance']; actual=scores.get('acceptance',[])
-    if [x.get('criterion') for x in actual]!=expected:
+    expected=r['case']['acceptance']; actual=scores.get('acceptance')
+    if not isinstance(actual,list) or [x.get('criterion') if isinstance(x,dict) else None for x in actual]!=expected:
         raise SystemExit('验收条目与本次快照不一致。')
     for x in actual:
         if x.get('pass') is not None and type(x['pass']) is not bool:
             raise SystemExit('验收 pass 只能 true / false / null。')
-        if x.get('pass') is not None and not x.get('evidence','').strip():
-            raise SystemExit('每个已评分项需填写 evidence。')
+        # A valid session that stopped early may leave an item unassessed, but not silently.
+        if (scores['valid'] or x.get('pass') is not None) and not written(x.get('evidence')):
+            raise SystemExit(f'每个验收条目都需填写 evidence（至少{MIN_EVIDENCE}个非空白字符）：'
+                             '已评写轮次、原文或具体行为，未评（null）写无法评判的原因。')
     for k in ('clarity','cooperation'):
         value=scores.get(k)
         if value is not None and (type(value) is not int or not 1<=value<=5):
             raise SystemExit('主观分只能为1–5或null。')
+        if value is not None and not written(scores.get(k+'_evidence')):
+            raise SystemExit(f'{k} 已打分，需在 {k}_evidence 写明具体事件（至少{MIN_EVIDENCE}个非空白字符）。')
     if args.outcome=='completed' and len(r['turns'])!=len(r['case']['turns']):
         raise SystemExit('轮次未完成；可使用 --outcome failed 记录失败。')
-    if r['case']['category']=='interrupt' and scores['valid'] and not any(t['interruption_observed'] for t in r['turns']):
-        raise SystemExit('没有观察到运行中干预，不能标为有效。')
+    if scores['valid']:
+        if args.outcome=='completed' and any(x.get('pass') is None for x in actual):
+            raise SystemExit('有效且跑完全部轮次的会话需评完全部验收条目，pass 不能留 null。')
+        problem=interruption_problem(r) if r['case']['category']=='interrupt' else None
+        if problem:
+            raise SystemExit(problem)
+        found=conflicts(r['case'],r['turns'],actual)
+        if found and not getattr(args,'confirm_conflicts',False):
+            raise SystemExit('人工验收与自动检查冲突，尚未结案：\n'+'\n'.join(found)+
+                             '\n请改判；若自动检查在此不适用，在 evidence 说明后加 --confirm-conflicts 结案。冲突会保留在报告中。')
     r.update({'valid':scores['valid'],'scores':scores,'status':args.outcome if scores['valid'] else 'invalid','finished':stamp()})
     save(path,r); print('已结案：',r['status'])
 
@@ -272,9 +339,50 @@ def pair_records(records, products=None):
     return [{p:g[p][0] for p in products} for g in groups.values()
             if set(g)==required and all(len(samples)==1 for samples in g.values())]
 
+def split(values, names):
+    """Counts of True, False and None, in that order."""
+    return '／'.join(f'{name} {sum(v is flag for v in values)}' for name,flag in zip(names,(True,False,None)))
+
+def summary_cells(r):
+    checks=[c for t in r['turns'] for c in t['checks']]
+    auto=[c['pass'] for c in checks if c['check'] not in PROTOCOL_CHECKS]
+    protocol=[c['check']+'：'+{True:'符合',False:'不符合',None:'待人工确认'}[c['pass']] for c in checks if c['check'] in PROTOCOL_CHECKS]
+    scores=r.get('scores')
+    if not scores:
+        graded=clash=subjective='未评分'
+    else:
+        accepted=scores['acceptance']; found=conflicts(r['case'],r['turns'],accepted)
+        graded=split([x.get('pass') for x in accepted],('通过','未通过','未评'))+f'（共 {len(accepted)} 条）'
+        clash='未对账（旧案例快照）' if found is None else f'{len(found)} 处' if found else '无'
+        subjective=' / '.join('未评' if scores.get(k) is None else str(scores[k]) for k in ('clarity','cooperation'))
+    return [r['case']['title']+' / '+r['product'],r['status'],r['config']['model'],
+            f'{len(r["turns"])}/{len(r["case"]["turns"])}',
+            split(auto,('通过','未通过','待人工')) if auto else '无','；'.join(protocol) or '—',graded,clash,subjective]
+
+def blind_rows(folder, records):
+    """Returned reviewer scores, joined to their jobs through the key kept in the plan directory."""
+    by_job={r['job']:r for r in records}; rows=[]
+    for key_path in sorted(folder.glob('blind-*'+KEY_SUFFIX)):
+        name=key_path.name[:-len(KEY_SUFFIX)]; sheet=folder/name/'scores.json'
+        if not sheet.is_file():
+            continue
+        try:
+            key=load(key_path)
+            for s in load(sheet)['samples']:
+                if all(s.get(f) is None for f in BLIND_FIELDS):
+                    continue
+                r=by_job[key[s['id']]]
+                marks=['未评' if s.get(f) is None else s[f] if type(s[f]) is int and 1<=s[f]<=5 else '无效值' for f in BLIND_FIELDS]
+                rows.append([name,s['id'],r['case']['title'],r['product'],*marks,s['evidence'] if written(s.get('evidence')) else '缺依据'])
+        except (ValueError,KeyError,TypeError,AttributeError):
+            rows.append([name,'评分文件格式无效，未并入','','','','','',''])
+    return rows
+
 def report(args):
     path=Path(args.plan).resolve(); plan,records=collect(path)
     e=lambda x:html.escape(str(x))
+    table=lambda head,rows:('<table><tr>'+''.join('<th>'+e(h)+'</th>' for h in head)+'</tr>'+
+                            ''.join('<tr>'+''.join('<td>'+e(v)+'</td>' for v in row)+'</tr>' for row in rows)+'</table>')
     products=plan_products(plan)
     groups=pair_records(records, products)
     chunks=['<!doctype html><meta charset="utf-8"><title>会话体验研究</title><style>body{font:16px system-ui;max-width:1200px;margin:40px auto;padding:20px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:10px}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>',
@@ -283,22 +391,29 @@ def report(args):
     chunks.append('<p>本计划应用：'+e(', '.join(products))+'。完整对照要求同一案例、重复编号、模式下，所选应用全部有效结案；缺少任何一方不作为完整对照。</p>')
     if len(products)==1:
         chunks.append('<p>单应用计划只记录测试结果，不形成跨应用对照或匿名对照导出。</p>')
+    chunks.append('<p>自动检查只统计已提交的轮次，各项单列通过、未通过和待人工确认的数量；提前失败的会话轮次更少，'
+                  '检查数量不能与跑完的会话直接比较。协议检查反映操作员是否按时执行，不计入应用。'
+                  '人工验收列出未评条目数和总条数；人工判通过而关联的自动检查未通过时计为冲突。'
+                  '清晰与合作两项由知道应用身份的操作员给出，不是盲评。</p>')
+    head=['案例 / 应用','状态','模型','已提交轮次','自动检查','协议检查','人工验收','验收与自动检查冲突','清晰 / 合作（操作员非盲）']
     for title,items in [('有效正式测试',[r for r in records if eligible(r)]),('自测、无效或待确认',[r for r in records if not eligible(r)])]:
-        chunks.append('<h2>'+title+'</h2><table><tr><th>案例 / 应用</th><th>状态</th><th>模型</th><th>自动检查</th><th>验收</th><th>清晰 / 合作</th></tr>')
-        for r in items:
-            checks=[c for t in r['turns'] for c in t['checks'] if c['pass'] is not None]
-            scores=r.get('scores',{}); accepted=[x['pass'] for x in scores.get('acceptance',[]) if x['pass'] is not None]
-            vals=[r['case']['title']+' / '+r['product'],r['status'],r['config']['model'],f'{sum(x["pass"] for x in checks)}/{len(checks)}' if checks else '不适用',f'{sum(accepted)}/{len(accepted)} 已评项' if accepted else '未评',str(scores.get('clarity'))+' / '+str(scores.get('cooperation'))]
-            chunks.append('<tr>'+''.join('<td>'+e(v)+'</td>' for v in vals)+'</tr>')
-        chunks.append('</table>')
+        chunks.append('<h2>'+title+'</h2>'+table(head,map(summary_cells,items)))
     chunks.append('<h2>完整对照样本</h2>')
     for g in groups:
         first=next(iter(g.values()))
         members=[e(product+' '+r['job']+'（模型：'+r['config']['model']+'）') for product,r in g.items()]
         chunks.append('<p>'+e(first['case']['title'])+'：'+' ↔ '.join(members)+'</p>')
+    reviewed=blind_rows(path.parent,records)
+    if reviewed:
+        chunks.append('<h2>匿名文本评审</h2><p>评审者只看到随机标签；本表已与身份映射合并，不要回传给评审者。未填写的样本不列出。</p>'+
+                      table(['导出目录','样本','案例','应用','事实准确性','指令遵守','实用性','依据'],reviewed))
     chunks.append('<h2>各轮证据及观测指标</h2>')
     for r in records:
-        chunks.append('<details><summary>'+e(r['job']+' '+r['product']+' '+r['case']['title'])+'</summary><pre>'+e(json.dumps(r,ensure_ascii=False,indent=2))+'</pre></details>')
+        scores=r.get('scores'); verdicts=''
+        if scores:
+            verdicts=table(['验收条目','人工判定','依据'],[[x['criterion'],VERDICT.get(x.get('pass'),'无效值'),x.get('evidence','')] for x in scores['acceptance']])
+            verdicts+=''.join('<p>冲突：'+e(line)+'</p>' for line in conflicts(r['case'],r['turns'],scores['acceptance']) or [])
+        chunks.append('<details><summary>'+e(r['job']+' '+r['product']+' '+r['case']['title'])+'</summary>'+verdicts+'<pre>'+e(json.dumps(r,ensure_ascii=False,indent=2))+'</pre></details>')
     out=path.parent/'report.html'; out.write_text('\n'.join(chunks)+'\n',encoding='utf-8'); print(out)
 
 def blind(args):
@@ -314,9 +429,10 @@ def blind(args):
             label=f'P{i:03}-{letter}'; mapping[label]=r['job']
             entries.append({'id':label,'case':r['case']['title'],'turns':[{'prompt':t['prompt'],'answer':t['answer']} for t in r['turns']]})
     save(destination/'review.json',{'notice':'只评文本，不评桌面操作。配置、来源和产品标签已去除，但回答自身可能暴露身份，分享前检查。','samples':entries})
-    save(destination/'scores.json',{'samples':[{'id':x['id'],'factuality':None,'instruction_following':None,'usefulness':None,'evidence':''} for x in entries]})
-    save(path.parent/(destination.name+'-KEY-DO-NOT-SHARE.json'),mapping)
-    print('只把此目录交给评审者：',destination,'\n身份映射独立保存在计划目录，勿分享。各项1–5分，并注明原文依据。')
+    save(destination/'scores.json',{'rubric':BLIND_RUBRIC,'samples':[{'id':x['id']}|dict.fromkeys(BLIND_FIELDS)|{'evidence':''} for x in entries]})
+    save(path.parent/(destination.name+KEY_SUFFIX),mapping)
+    print('只把此目录交给评审者：',destination,'\n身份映射独立保存在计划目录，勿分享。按 scores.json 内的分级标准打1–5分并注明原文依据；'
+          '填好的 scores.json 放回该目录后，report 会并入报告。')
 
 def nonnegative(raw):
     value=float(raw)
@@ -336,7 +452,7 @@ def main():
     for field in ('elapsed','first-feedback','active-seconds','interrupt-delay'): s.add_argument('--'+field,type=nonnegative)
     for field in ('corrections','actions'): s.add_argument('--'+field,type=int)
     s.add_argument('--interruption-observed',action='store_true')
-    f=sub.add_parser('finish'); f.add_argument('--record',required=True); f.add_argument('--scores'); f.add_argument('--outcome',choices=['completed','failed'],default='completed')
+    f=sub.add_parser('finish'); f.add_argument('--record',required=True); f.add_argument('--scores'); f.add_argument('--outcome',choices=['completed','failed'],default='completed'); f.add_argument('--confirm-conflicts',action='store_true',help='人工判通过而自动检查未通过时，确认仍按人工判定结案')
     args=p.parse_args()
     if args.command=='list':
         for c in load(ROOT/'cases-v2.json'): print(c['id']+'\t'+c['title'])

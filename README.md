@@ -85,7 +85,7 @@ python3 study.py submit --record studies/new-round/records/J001.json \
   --interruption-observed --interrupt-delay 1.5
 ```
 
-Supply `--interruption-observed` only when you actually observed an intervention during the running task. Record the delay only when measured. Without that observation, the tool refuses to mark an interruption case as valid.
+Supply `--interruption-observed` only when you actually observed an intervention during the running task, and only on the turn that has a planned intervention. Record the delay only when measured. Without that observation, or when the recorded delay exceeds the five-second limit, the tool refuses to mark an interruption case as valid: the operator protocol was not met, so set `valid` to `false` and give the reason. Intervention timing is a protocol check, listed separately in the report and not counted among the application's automatic checks.
 
 ## Finish and score a conversation
 
@@ -98,8 +98,10 @@ python3 study.py finish --record studies/new-round/records/J001.json
 Edit the generated `J001-scores.json`:
 
 - `valid`: set to `true` when the conversation was run turn by turn with the correct materials and no future-prompt leakage. Set to `false` for a protocol violation and explain it in `invalid_reason`. Poor performance or a failed task does not by itself invalidate the test.
-- `acceptance[].pass`: `true`, `false`, or `null` for an unassessed item. Every assessed item needs a supporting quotation, file reference, or specific observed behavior in `evidence`.
-- `clarity` and `cooperation`: integers from 1 to 5, or `null`. Anchors: 1 = severe obstruction; 2 = repeated confusion or correction; 3 = completion with friction; 4 = minor friction; 5 = clear interaction without extra correction. Explain the observations in `summary`.
+- `acceptance[].pass`: `true`, `false`, or `null` for an unassessed item. A valid conversation that ran every turn must have every item assessed; only one that failed early (`--outcome failed`) may leave `null`. In a valid conversation every item needs at least six non-whitespace characters of `evidence`: the turn, quotation, file, or specific behavior for an assessed item, and the reason it could not be judged for an unassessed one.
+- `clarity` looks only at what the application said: whether its replies make clear what it did, on what basis, and what remains undone or uncertain. `cooperation` looks only at what it did: whether it stayed within the scope and pace of the instructions, and how much correction it needed beyond the case's planned follow-ups. Each has its own level-by-level standard in the scoring template's `rubric` (written in Chinese). Use an integer from 1 to 5, or `null`; a scored item needs specific events in `clarity_evidence` or `cooperation_evidence`. Both come from an operator who knows which application is being scored. They are not blind ratings, and the report labels them accordingly.
+
+When a human pass contradicts a linked automatic check (for example, "sections one and three kept verbatim" is passed although the automatic check found the overview changed), `finish` lists the conflicts and refuses to close the record. Change the verdict, or, if the automatic check does not apply here, explain why in `evidence` and close with `--confirm-conflicts`; the conflict still appears in the report. Only some acceptance items have a matching automatic check; the rest rely entirely on human judgment.
 
 ```sh
 python3 study.py finish --record studies/new-round/records/J001.json \
@@ -130,9 +132,18 @@ Reports separate valid formal trials from self-tests, invalid trials, and record
 
 Model names and configuration remain visible in reports. A `controlled` label does not prove that the actual models match. Per-turn timing, operator effort, checks, and artifact snapshots appear in the evidence details. Multiple constraint checks are not independent samples, and the tool does not produce an overall ranking.
 
-Anonymized exports contain prompts, answers, randomized labels, and a scoring template. Two-app groups use A/B; three-app groups use A/B/C. Product labels and configuration are removed, while the identity mapping is saved separately in a `KEY-DO-NOT-SHARE` file under the plan directory. Never give that mapping to reviewers. Answers may themselves reveal product names or paths, so inspect exports before sharing; complete anonymity is not guaranteed. Review templates are filled in and retained separately and are not automatically imported into the main report.
+How to read the summary table:
 
-Text reviews use three 1–5 dimensions: factual accuracy, instruction following, and usefulness. Unsupported claims reduce factual accuracy; omissions and unauthorized changes reduce instruction following; usefulness concerns whether the answer can be used and whether next steps are clear. Retain source evidence. Score desktop interaction separately rather than inferring it from answer text.
+- Submitted turns: turns submitted out of the case's total. Automatic checks cover submitted turns only, so a conversation that failed early has fewer checks, and its counts cannot be compared directly with a conversation that ran to the end.
+- Automatic checks: passed, failed, and awaiting manual review are counted separately and not combined into a ratio.
+- Protocol checks: whether the operator sent the intervention in time. They do not count for or against the application.
+- Human acceptance: passed, failed, and unassessed counts, with the total number of items.
+- Conflicts: places where a human pass contradicts a linked automatic check. Older case snapshots carry no links and show as not reconciled.
+- Clarity and cooperation: the operator's non-blind ratings.
+
+Anonymized exports contain prompts, answers, randomized labels, and a scoring template. Two-app groups use A/B; three-app groups use A/B/C. Product labels and configuration are removed, while the identity mapping is saved separately in a `KEY-DO-NOT-SHARE` file under the plan directory. Never give that mapping to reviewers. Answers may themselves reveal product names or paths, so inspect exports before sharing; complete anonymity is not guaranteed.
+
+Text reviews use three 1–5 dimensions: factual accuracy, instruction following, and usefulness. The standard for each level is in the `rubric` of the exported `scores.json` (written in Chinese). When the reviewer returns it, put `scores.json` back in its export directory and run `report` again: the report gains an anonymized text review section that restores each application from the identity mapping and lists the scores with their evidence. A value outside 1–5 is shown as invalid and missing evidence is shown as missing; no averages are computed. The merged report reveals application identities, so do not send it back to reviewers. Score desktop interaction separately rather than inferring it from answer text.
 
 ## Additional plans and retests
 
@@ -154,7 +165,7 @@ Plans freeze their case snapshots and randomize case order. Two-app plans retain
 
 Text checks cover required strings, required dates, minimum and maximum non-whitespace character counts, paragraph count, the absence of Markdown heading lines, a fixed paragraph, and verbatim preservation of paragraphs identified by blank lines. Counts include punctuation and Markdown. Dates written as `2026-12-15`, `2026/12/15`, or `2026年12月15日` are treated as the same date; a date without its year is marked for manual review instead of pass or fail. Paragraph checks expect the answer file to contain only the deliverable, since an introductory line counts as a paragraph. A check the tool cannot run is reported as needing review, never silently skipped. The short-text revision cases require 450–550 characters before shortening to 220; the final turn does not restate the key constraints. An initial draft that is too short fails the initial requirement; a later answer below 220 characters does not by itself demonstrate successful shortening.
 
-Artifact-review cases save HTML, Markdown, CSV, and source-material snapshots after each turn. They check the source file's hash, that the first report contains all three required sections and references no external scripts, styles, or media, that the two untouched sections stay verbatim, and that the risk section actually changed in each revision turn. Discussion-only and read-only turns compare file hashes with the previous turn. Missing-material cases flag a workspace that gains the file the prompt asked for but the materials never contained. Interruption cases compare the recorded delay with the five-second limit and leave the timing for manual review when no delay was measured. Files that are not UTF-8 are still recorded and flagged for review. A changed section is not proof of a correct change. Hashes cannot detect a file being changed and then restored, or establish that a browser preview rendered correctly. Preview behavior, tool activity, and live interruption still require operator evidence. Files and screenshots may contain personal information; inspect them before sharing.
+Artifact-review cases save HTML, Markdown, CSV, and source-material snapshots after each turn. They check the source file's hash, that the first report contains all three required sections and references no external scripts, styles, or media, that the two untouched sections stay verbatim, and that the risk section actually changed in each revision turn. Discussion-only and read-only turns compare file hashes with the previous turn. Missing-material cases flag a workspace that gains the file the prompt asked for but the materials never contained. Interruption cases compare the recorded delay with the five-second limit as a separate protocol check; a conversation over the limit cannot be marked valid, and the timing is left for manual review when no delay was measured. Files that are not UTF-8 are still recorded and flagged for review. A changed section is not proof of a correct change. Hashes cannot detect a file being changed and then restored, or establish that a browser preview rendered correctly. Preview behavior, tool activity, and live interruption still require operator evidence. Files and screenshots may contain personal information; inspect them before sharing.
 
 The short-conversation catalog is `cases-v2.json`. Running `suite.py` regenerates the built-in V2 cases and overwrites manual edits to that file. `checks.py` provides the text-constraint checks.
 
@@ -164,6 +175,8 @@ The separate [long-context compaction case](docs/long-context-compaction-qinglu.
 
 This is a separate operator protocol, is not yet integrated into `study.py`, and is not included in the 18 short-conversation cases. Generating the case does not constitute a completed compaction test or a measured result.
 
+Each anchor in that case is graded by hand as correct, partial, unknown, or wrong; the points a correct answer needs are listed under `required_points` in the JSON. A retention score (1 for correct, 0.5 for partial) is reported next to the number of wrong items, and the two are never merged into one figure. A second uncompacted branch estimates variation unrelated to compaction; a difference between the compacted branch and the control that is no larger than this variation is not attributed to compaction. All of this grading is manual, with no program checking it.
+
 `longcase.py` regenerates the synthetic load in that JSON and leaves the hand-written turns, probes, and scoring untouched. If twelve batches are not enough to reach compaction, `python3 longcase.py --extra N` prints N further batches with new ticket numbers without rewriting the case file.
 
 ## Run the project checks
@@ -172,4 +185,4 @@ This is a separate operator protocol, is not yet integrated into `study.py`, and
 python3 -m unittest -v
 ```
 
-Tests use temporary data and do not manufacture product-evaluation results. They cover every text check, case counts and agreement between the saved catalogs and their generators, application selection and ordering, protocol exclusions, retention of valid failures, section and file-change checks, missing-material and interruption handling, per-turn recording, resuming, score validation, command-line defaults, HTML escaping, two- and three-app anonymized exports, compatibility with older V2 plans, and the long-context load's numbering, variety, and freedom from anchor wording.
+Tests use temporary data and do not manufacture product-evaluation results. They cover every text check, case counts and agreement between the saved catalogs and their generators, application selection and ordering, protocol exclusions, retention of valid failures, section and file-change checks, missing-material and interruption handling, per-turn recording, resuming, score validation (unassessed items, evidence length, empty values), conflicts between human acceptance and automatic checks, late interventions being refused as valid, the report's summary columns, command-line defaults, HTML escaping, two- and three-app anonymized exports and merging returned review scores into the report, compatibility with older V2 plans, and the long-context load's numbering, variety, freedom from anchor wording, and complete grading points.

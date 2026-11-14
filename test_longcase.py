@@ -63,8 +63,24 @@ class LongCaseTests(unittest.TestCase):
         self.assertEqual([p['id'] for p in self.case['probes']], ['recall', 'recovery'])
         self.assertEqual(len(self.case['expected']), 10)
         self.assertIn('prompt_scope', self.case['scoring'])
-        for branch in ('A', 'B'):
+        for branch in ('A', 'A_repeat', 'B'):
+            self.assertIn(branch, self.case['branches'])
             self.assertLessEqual({'session_id', 'compression_events', 'recall', 'recovery'}, set(self.case['record_template'][branch]))
+
+    def test_every_semantic_anchor_lists_the_points_a_correct_answer_needs(self):
+        points = self.case['required_points']
+        self.assertEqual(set(points), set(self.case['expected']) - {'verbatim', 'nonce'})
+        seeds = '\n'.join(t['prompt'] for t in self.case['seed_turns'])
+        for anchor, required in points.items():
+            self.assertTrue(required, anchor)
+            self.assertEqual(len(set(required)), len(required), anchor)
+            # Any figure a point relies on was actually given to the target.
+            for value in re.findall(r'\d[\d-]*\d', ''.join(required)):
+                self.assertIn(value, seeds, anchor)
+        for key in ('per_item', 'closed_recall', 'comparison', 'noise'):
+            self.assertIn(key, self.case['scoring'])
+        self.assertIn('partial', self.case['scoring']['per_item'])
+        self.assertIn('anchor_grades', self.case['record_template'])
 
 
 if __name__ == '__main__':

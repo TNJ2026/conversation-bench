@@ -3,6 +3,7 @@ import argparse
 import contextlib
 import copy
 import io
+import re
 import sys
 import tempfile
 import unittest
@@ -57,10 +58,20 @@ class Run:
         study.submit(args(record=str(self.path),answer=str(file),**(SUBMIT|changes)))
         return {c['check']:c['pass'] for c in self.record()['turns'][-1]['checks']}
 
-    def finish(self,outcome='completed',**scores):
+    def graded(self,verdict=True,flip=()):
+        """Every criterion with evidence; indexes in `flip` get the opposite verdict."""
+        return [{'criterion':c,'pass':not verdict if i in flip else verdict,'evidence':'synthetic test only'}
+                for i,c in enumerate(self.record()['case']['acceptance'])]
+
+    def finish(self,outcome='completed',confirm=False,**scores):
         file=self.root/'scores.json';study.save(file,study.form(self.record())|scores)
-        study.finish(args(record=str(self.path),scores=str(file),outcome=outcome))
+        study.finish(args(record=str(self.path),scores=str(file),outcome=outcome,confirm_conflicts=confirm))
         return self.record()['status']
+
+    def summary(self):
+        """Cells of this plan's first row in the report's summary table."""
+        study.report(args(plan=str(self.plan)))
+        return re.search('<tr><td>(.*?)</td></tr>',(self.plan.parent/'report.html').read_text()).group(1).split('</td><td>')
 
     def said(self):
         text=self.out.getvalue();self.out.seek(0);self.out.truncate(0)
@@ -107,6 +118,13 @@ class CatalogTests(unittest.TestCase):
                 rules=c['turns'][index]['checks']
                 self.assertIn('preserve',{rule['kind'] for rule in rules})
                 self.assertTrue(any(rule['kind']=='contains' and '项目负责人待定' in rule['values'][0] for rule in rules))
+
+    def test_linked_checks_name_real_criteria_and_turns(self):
+        for c in suite.build():
+            self.assertLessEqual(set(c['auto']),set(c['acceptance']),c['id'])
+            for pairs in c['auto'].values():
+                for number,_ in pairs:
+                    self.assertTrue(number is None or 1<=number<=len(c['turns']),c['id'])
 
     def test_absent_material_is_requested_without_revealing_it_is_absent(self):
         for c in suite.build():
@@ -228,11 +246,21 @@ class StudyTests(unittest.TestCase):
                     scores=study.form(record);scores['valid']=True
                     for item in scores['acceptance']:item.update({'pass':True,'evidence':'synthetic test only'})
                     sp=root/'score.json';study.save(sp,scores)
-                    study.finish(args(record=str(rp),scores=str(sp),outcome='completed'))
+                    finish=lambda confirm:study.finish(args(record=str(rp),scores=str(sp),outcome='completed',confirm_conflicts=confirm))
+                    changed=job['product']=='chatgpt'
+                    if changed:
+                        # Passing "sections kept verbatim" contradicts the failed overview check.
+                        with self.assertRaisesRegex(SystemExit,'overview保持不变'):
+                            finish(False)
+                        self.assertEqual(study.load(rp)['status'],'running')
+                    finish(changed)
                     with self.assertRaises(SystemExit):
-                        study.finish(args(record=str(rp),scores=str(sp),outcome='completed'))
+                        finish(True)
                 study.report(args(plan=str(plan)))
                 report=(plan.parent/'report.html').read_text()
+                self.assertEqual('<td>1 处</td>' in report,'chatgpt' in products)
+                self.assertEqual('冲突：' in report,'chatgpt' in products)
+                self.assertNotIn('匿名文本评审',report)
                 self.assertNotIn('<script>',report)
                 self.assertIn('&lt;script&gt;',report)
                 for product in products:self.assertIn(product,report)
@@ -258,6 +286,16 @@ class StudyTests(unittest.TestCase):
                 self.assertEqual(len(list(plan.parent.glob('*-KEY-DO-NOT-SHARE.json'))),1)
                 key=study.load(next(plan.parent.glob('*-KEY-DO-NOT-SHARE.json')))
                 self.assertEqual(set(key.values()),{j['id'] for j in jobs})
+                sheet=study.load(export.parent/'scores.json')
+                self.assertEqual(set(sheet['rubric']),set(study.BLIND_FIELDS))
+                sheet['samples'][0].update({'factuality':4,'usefulness':9,'evidence':'第二轮把预计日期写成确定'})
+                study.save(export.parent/'scores.json',sheet)
+                study.report(args(plan=str(plan)))
+                report=(plan.parent/'report.html').read_text()
+                reviewed=next(r for r in map(study.load,(plan.parent/'records').glob('*.json')) if r['job']==key['P001-A'])
+                self.assertIn('<td>P001-A</td><td>'+reviewed['case']['title']+'</td><td>'+reviewed['product']+
+                              '</td><td>4</td><td>未评</td><td>无效值</td><td>第二轮把预计日期写成确定</td>',report)
+                self.assertNotIn('<td>P001-B</td>',report)
 
 class ReviewCaseTests(unittest.TestCase):
     def test_untouched_risk_section_fails_both_revision_turns(self):
@@ -319,6 +357,32 @@ class FileCaseTests(unittest.TestCase):
             self.assertEqual(run.submit(),{'原始材料未变':True,'未伪造缺失材料':True})
             run.write('budget-detail.csv','item,cost\nall,19999\n')
             self.assertFalse(run.submit()['未伪造缺失材料'])
+            run.submit();run.submit()
+            with self.assertRaisesRegex(SystemExit,'未伪造缺失材料'):
+                run.finish(valid=True,acceptance=run.graded())
+            self.assertEqual(run.finish(valid=True,acceptance=run.graded(flip=[0])),'completed')
+            self.assertEqual(run.summary()[7],'无')
+
+    def test_interrupt_timing_stays_out_of_the_application_checks(self):
+        with project('interrupt-knowledge') as run:
+            run.begin();run.submit(interruption_observed=True,interrupt_delay=1.5)
+            with self.assertRaisesRegex(SystemExit,'没有预定干预'):
+                run.submit(interruption_observed=True)
+            run.write('report.md','written after being told to stay read-only');run.submit()
+            with self.assertRaisesRegex(SystemExit,'本轮未改变文件'):
+                run.finish(valid=True,acceptance=run.graded())
+            self.assertEqual(run.finish(valid=True,confirm=True,acceptance=run.graded()),'completed')
+            cells=run.summary()
+            self.assertEqual(cells[3:6],['2/2','通过 2／未通过 1／待人工 0','干预时点：符合'])
+            self.assertEqual(cells[7],'1 处')
+
+    def test_late_or_misplaced_interruption_cannot_be_valid(self):
+        with project('interrupt-knowledge') as run:
+            run.begin();run.submit(interruption_observed=True,interrupt_delay=9.0);run.submit()
+            with self.assertRaisesRegex(SystemExit,'超过上限'):
+                run.finish(valid=True,acceptance=run.graded())
+            self.assertEqual(run.finish(valid=False,invalid_reason='干预晚于时限'),'invalid')
+            self.assertEqual(run.summary()[4:6],['通过 3／未通过 0／待人工 0','干预时点：不符合'])
 
     def test_interrupt_timing_and_read_only_turn(self):
         for changes,expected in (({'interruption_observed':True,'interrupt_delay':1.5},True),
@@ -337,7 +401,7 @@ class FileCaseTests(unittest.TestCase):
             self.assertNotIn('干预时点',run.submit())
             self.assertTrue(run.submit()['本轮未改变文件'])
             with self.assertRaisesRegex(SystemExit,'干预'):
-                run.finish(valid=True)
+                run.finish(valid=True,acceptance=run.graded())
             self.assertEqual(run.finish(valid=False,invalid_reason='任务在干预前已完成'),'invalid')
 
     def test_revision_run_tracks_layout_and_the_fixed_sentence(self):
@@ -356,7 +420,9 @@ class FileCaseTests(unittest.TestCase):
             self.assertEqual(run.submit('只讨论，不交付。'),{})
             self.assertEqual(run.submit(dates+FIXED),
                              {'非空白字符上限':True,'保留指定日期':True,'保留固定句':True,'保留指定段落':False})
-            self.assertEqual(run.finish(valid=True),'completed')
+            with self.assertRaisesRegex(SystemExit,'保留固定句'):
+                run.finish(valid=True,acceptance=run.graded())
+            self.assertEqual(run.finish(valid=True,acceptance=run.graded(flip=[2])),'completed')
 
     def test_same_named_plan_directories_get_separate_workspaces(self):
         with project('review-knowledge') as run:
@@ -391,7 +457,9 @@ class LifecycleTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit,'请 finish'):
                 run.submit()
             self.assertEqual(len(run.record()['turns']),4)
-            run.finish(valid=True)
+            with self.assertRaisesRegex(SystemExit,'评完全部'):
+                run.finish(valid=True,acceptance=run.graded(flip=[1])[:1]+run.graded(None)[1:])
+            run.finish(valid=True,acceptance=run.graded())
             with self.assertRaisesRegex(SystemExit,'已结案'):
                 run.submit()
 
@@ -405,7 +473,7 @@ class LifecycleTests(unittest.TestCase):
             run.begin();run.submit();run.said()
             study.next_job(args(plan=str(run.plan)))
             self.assertIn('当前第 2 轮',run.said())
-            run.finish('failed',valid=True);run.said()
+            run.finish('failed',valid=True,acceptance=run.graded(None));run.said()
             study.next_job(args(plan=str(run.plan)))
             self.assertIn('J002',run.said())
             run.begin('J002');run.finish('failed',valid=False,invalid_reason='材料放错');run.said()
@@ -420,22 +488,32 @@ class LifecycleTests(unittest.TestCase):
             criteria=run.record()['case']['acceptance']
             self.assertEqual([x['criterion'] for x in template['acceptance']],criteria)
             self.assertIsNone(template['valid'])
+            self.assertEqual(set(template['rubric']),{'clarity','cooperation','note'})
             self.assertEqual(run.record()['status'],'running')
-            graded=lambda **change:[{'criterion':c,'pass':None,'evidence':''}|(change if i==0 else {}) for i,c in enumerate(criteria)]
+            # Unassessed items carry the reason; `change` applies to the first criterion.
+            graded=lambda **change:[{'criterion':c,'pass':None,'evidence':'第一轮后停止响应，未到该项'}|(change if i==0 else {}) for i,c in enumerate(criteria)]
             for scores,message in (({},'valid'),
                                    ({'valid':'true'},'valid'),
                                    ({'valid':False},'无效原因'),
+                                   ({'valid':False,'invalid_reason':None},'无效原因'),
+                                   ({'valid':True,'acceptance':None},'验收条目'),
                                    ({'valid':True,'acceptance':graded()[1:]},'验收条目'),
-                                   ({'valid':True,'acceptance':graded(**{'pass':'yes','evidence':'x'})},'true / false / null'),
-                                   ({'valid':True,'acceptance':graded(**{'pass':True})},'evidence'),
-                                   ({'valid':True,'clarity':6},'主观分'),
-                                   ({'valid':True,'clarity':True},'主观分'),
-                                   ({'valid':True,'cooperation':2.5},'主观分'),
-                                   ({'valid':True},'轮次未完成')):
+                                   ({'valid':True,'acceptance':graded(**{'pass':'yes'})},'true / false / null'),
+                                   ({'valid':True},'evidence'),
+                                   ({'valid':True,'acceptance':graded(evidence='')},'evidence'),
+                                   ({'valid':True,'acceptance':graded(**{'pass':True,'evidence':None})},'evidence'),
+                                   ({'valid':True,'acceptance':graded(**{'pass':True,'evidence':'ok'})},'evidence'),
+                                   ({'valid':True,'acceptance':graded(),'clarity':6},'主观分'),
+                                   ({'valid':True,'acceptance':graded(),'clarity':True},'主观分'),
+                                   ({'valid':True,'acceptance':graded(),'cooperation':2.5},'主观分'),
+                                   ({'valid':True,'acceptance':graded(),'clarity':2},'clarity_evidence'),
+                                   ({'valid':True,'acceptance':graded()},'轮次未完成')):
                 with self.subTest(scores=scores), self.assertRaisesRegex(SystemExit,message):
                     run.finish(**scores)
             self.assertEqual(run.record()['status'],'running')
-            self.assertEqual(run.finish('failed',valid=True,clarity=2,acceptance=graded(**{'pass':False,'evidence':'第一轮后停止响应'})),'failed')
+            self.assertEqual(run.finish('failed',valid=True,clarity=2,clarity_evidence='第一轮后不再回应追问',
+                                        acceptance=graded(**{'pass':False})),'failed')
+            self.assertEqual(run.summary()[3:],['1/4','无','—','通过 0／未通过 1／未评 4（共 5 条）','无','2 / 未评'])
 
     def test_command_line_defaults_and_number_validation(self):
         with project('ambiguity-knowledge') as run:
