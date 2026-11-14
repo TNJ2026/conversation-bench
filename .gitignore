@@ -1,0 +1,52 @@
+# macOS and editor-local files
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python caches, environments, and build outputs
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+
+# Local credentials and environment settings
+.env
+.env.*
+!.env.example
+!.env.template
+*.local
+
+# Recorded answers, raw session exports, workspaces, and reports
+/studies/
+/runs/
+/workspaces/
+/conversation-bench-workspaces/
+/archives/
+/artifacts/
+/reports/
+/report.html
+/docs/.qa-*/
+/docs/generated/
+/docs/agent-comparison-*
+/docs/build_agent_comparison.py
+
+# Temporary files and execution logs
+*.log
+*.tmp
+*.temp
