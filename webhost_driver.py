@@ -27,6 +27,9 @@ def sandbox_profile(home, workspace):
     denied = [repo/'docs', repo/'cases', repo/'README.md', repo/'README.zh-CN.md', repo/'cases-v2.json',
               Path.home()/'.dsh', Path.home()/'Library'/'Application Support'/'@deepseek-ai',
               Path.home()/'Downloads'/'deepseek-harness-plugins', Path('/private/tmp')]
+    if run_root.is_dir():
+        denied += [entry for entry in run_root.iterdir()
+                   if entry.name.startswith(('run.', 'scores', 'report')) or entry.name == 'raw']
     studies = repo/'studies'
     if studies.is_dir():
         denied += [child for child in studies.iterdir() if child.is_dir() and child.resolve() != run_root]

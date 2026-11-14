@@ -81,10 +81,14 @@ class WebHostTests(unittest.TestCase):
 
     def test_sandbox_profile_denies_answer_key_and_other_runs(self):
         repo = Path(webhost_driver.__file__).resolve().parent
-        profile = webhost_driver.sandbox_profile(self.root/'home', self.root/'ws')
+        (self.root/'run.json').write_text('{}'); (self.root/'raw').mkdir(exist_ok=True)
+        (self.root/'homes').mkdir(exist_ok=True)
+        profile = webhost_driver.sandbox_profile(self.root/'homes'/'A', self.root/'ws')
         self.assertNotIn('(deny default)', profile)
         self.assertIn(str(repo/'docs').replace('"', '\\"'), profile)
         self.assertIn('/private/tmp', profile)
+        self.assertIn('run.json', profile)
+        self.assertIn('raw', profile)
         self.assertIn('(deny file-read*', profile)
 
 if __name__ == '__main__':
