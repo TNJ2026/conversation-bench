@@ -66,6 +66,27 @@ class WebHostTests(unittest.TestCase):
         self.config = {'dsh_bin': str(self.fake), 'provider': 'fixture', 'model': 'fixture',
                        'effort': 'low', 'timeout': 20, 'app_version': 'test-only', 'sandbox': False}
 
+    def test_plugin_registration_is_required_and_evidence_is_returned(self):
+        import history_plugin
+        meta=history_plugin.freeze(self.root)
+        config=dict(self.config,history_plugin=meta,history_plugin_active=True)
+        with self.assertRaisesRegex(DriverError,'registration was not observed'):
+            WebHostDriver(config).perform(self.root/'missing',self.root/'ws','id','hello',False,self.root/'missing.jsonl')
+        self.fake.write_text(FAKE.replace('server = HTTPServer',
+            'assert sys.argv.index("--patch") < sys.argv.index("--no-open")\nprint("BENCH_CURRENT_HISTORY_READY 0.1.0",flush=True)\nserver = HTTPServer'))
+        result=WebHostDriver(config).perform(self.root/'registered',self.root/'ws','id','hello',False,self.root/'registered.jsonl')
+        self.assertTrue(result['history_plugin']['registered'])
+        self.assertEqual(result['history_plugin']['sha256'],meta['sha256'])
+        self.assertEqual(result['history_plugin']['calls'],[])
+
+    def test_plugin_is_not_staged_outside_its_active_phase(self):
+        import history_plugin
+        meta=history_plugin.freeze(self.root)
+        config=dict(self.config,history_plugin=meta,history_plugin_active=False)
+        result=WebHostDriver(config).perform(self.root/'inactive',self.root/'ws','id','hello',False,self.root/'inactive.jsonl')
+        self.assertNotIn('history_plugin',result)
+        self.assertFalse((self.root/'inactive'/'bench-current-history').exists())
+
     def test_one_action_creates_session_and_returns_filtered_events(self):
         result = WebHostDriver(self.config).perform(self.root/'home', self.root/'ws', 'id', 'hello', False,
                                                     self.root/'wire.jsonl')

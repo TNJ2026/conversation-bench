@@ -12,6 +12,7 @@ import time
 import uuid
 
 import longcase
+import history_plugin
 import checks as text_checks
 from dsh_driver import DriverError, DshDriver, text_content
 from webhost_driver import WebHostDriver
@@ -104,6 +105,8 @@ def create(args):
         raise ValueError('Use a new output directory; existing runs are never overwritten.')
     if not args.model.strip() or not args.provider.strip() or args.load_batches < 1:
         raise ValueError('Model, provider and a positive load-batch count are required.')
+    if getattr(args,'history_plugin',False) and getattr(args,'transport','sdk') != 'web':
+        raise ValueError('The current-history plugin requires --transport web.')
     case = load(getattr(args,'casefile',None) or longcase.CASE)
     pressure = case['pressure_turns'][:args.load_batches]
     if args.load_batches > len(pressure):
@@ -128,6 +131,8 @@ def create(args):
              'workspace':str(workspace), 'initial_files':files(workspace),
              'prefix':prefix, 'branch_order':order, 'results':{},
              'seed_sequences':{}, 'prefix_sequences':{}, 'checkpoint':None, 'pending':None, 'status':'ready', 'problems':[]}
+    if getattr(args,'history_plugin',False):
+        state['config']['history_plugin'] = history_plugin.freeze(root)
     save(path, state)
     print(path)
 
@@ -230,6 +235,14 @@ def validate_result(state, key, prompt, result):
         raise ValueError('Target action did not complete: '+str(result.get('finish_reason')))
     if not isinstance(result.get('events'), list) or not isinstance(result.get('answer'), str):
         raise ValueError('Target response lacks answer text or event evidence.')
+    plugin = state['config'].get('history_plugin')
+    proof = result.get('history_plugin')
+    if plugin and key.endswith('/recovery'):
+        if (not isinstance(proof,dict) or proof.get('registered') is not True or
+                any(proof.get(k) != plugin[k] for k in ('name','version','sha256','activation'))):
+            raise ValueError('History plugin loading evidence is missing or differs from the frozen plugin.')
+    elif proof:
+        raise ValueError('History plugin appeared outside its configured recovery phase.')
     server = result.get('server')
     if state.get('server') and server != state['server']:
         raise ValueError('DSH runtime identity/version changed during the run.')
@@ -270,8 +283,7 @@ def run(path, max_actions=None, driver=None):
             raise ValueError('Previous target action has an uncertain outcome; inspect raw logs. Automatic resend is forbidden.')
         if state['status'] in ('invalid','attention','completed'):
             raise ValueError('This run is closed or needs investigation; it cannot be automatically continued.')
-        if driver is None:
-            driver = WebHostDriver(state['config']) if state['config'].get('transport') == 'web' else DshDriver(state['config'])
+        supplied_driver = driver
         done = 0
         while True:
             key, prompt = action(state)
@@ -295,7 +307,11 @@ def run(path, max_actions=None, driver=None):
             print('Running '+key, flush=True)
             started = time.monotonic()
             try:
-                result = driver.perform(home, Path(state['workspace']), state['id'], prompt, resume, wire)
+                active_driver = supplied_driver
+                if active_driver is None:
+                    config = dict(state['config'],history_plugin_active=key.endswith('/recovery'))
+                    active_driver = WebHostDriver(config) if config.get('transport') == 'web' else DshDriver(config)
+                result = active_driver.perform(home, Path(state['workspace']), state['id'], prompt, resume, wire)
             except (Exception, KeyboardInterrupt):
                 # The target may have committed work. Never guess that a retry is safe.
                 state['status'] = 'attention'; save(path, state)
@@ -487,6 +503,7 @@ def report(path):
               'compaction_proof':state['results'].get('B/compact',{}).get('compaction_proof'),
               'elapsed_seconds':{b:sum(r['elapsed_seconds'] for k,r in state['results'].items() if k.startswith(b+'/')) for b in ('prefix',*BRANCHES)},
               'action_elapsed_seconds':{k:r['elapsed_seconds'] for k,r in state['results'].items()},
+              'history_plugin':{k:r['history_plugin'] for k,r in state['results'].items() if 'history_plugin' in r},
               'tokens':None,
               'conclusion_checks':state.get('conclusion_checks'),
               'notice':('Web-host runtime experiment (no native window), not a desktop-UI score. '
@@ -541,6 +558,7 @@ def main(argv=None):
     c.add_argument('--case',dest='casefile',help='Case JSON path; defaults to the shipped case')
     c.add_argument('--load-batches',type=positive,default=12); c.add_argument('--seed',type=int,default=42)
     c.add_argument('--timeout',type=positive,default=900)
+    c.add_argument('--history-plugin',action='store_true',help='Freeze the current-session read-only plugin; enable it only during recovery (web transport).')
     c.add_argument('--transport',choices=('sdk','web'),default='sdk',
                    help='sdk: stdio JSON-RPC; web: the shipped browser runtime over its local /api transport')
     for command in ('run','next','extend','grade','report'):

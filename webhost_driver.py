@@ -18,6 +18,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 from dsh_driver import DriverError
+import history_plugin
 
 BOOT_URL = re.compile(r'(http://127\.0\.0\.1:\d+)/\?token=([A-Za-z0-9_-]+)')
 def sandbox_profile(home, workspace):
@@ -73,7 +74,12 @@ class WebHostDriver:
         if self.config.get('sandbox', True):
             # The outer sandbox is the boundary; disable the nested one so bash keeps working.
             env['DSH_PERMISSION_MODE'] = 'danger-full-access'
-        unwrapped = [self.config['dsh_bin'], '--profile', 'web', '--no-open', '--port', '0']
+        unwrapped = [self.config['dsh_bin'], '--profile', 'web']
+        plugin = self.config.get('history_plugin') if self.config.get('history_plugin_active') else None
+        if plugin:
+            patch = history_plugin.stage(home,plugin)
+            unwrapped += ['--patch',str(patch)]
+        unwrapped += ['--no-open', '--port', '0']
         if self.config.get('sandbox', True):
             profile = home.parent/'sandbox.sb'
             profile.write_text(sandbox_profile(home, workspace))
@@ -97,6 +103,11 @@ class WebHostDriver:
             reader.start()
             try:
                 base, token = self._boot(lines, deadline, log, proc)
+                if plugin:
+                    log.flush()
+                    marker = 'BENCH_CURRENT_HISTORY_READY '+plugin['version']
+                    if marker not in transcript.read_text(encoding='utf-8'):
+                        raise DriverError('History plugin registration was not observed; refusing a mislabeled trial.')
                 client = _Client(base, token, deadline, log)
                 client.connect()
                 stored = json.loads(state_path.read_text()) if state_path.exists() else {}
@@ -133,8 +144,11 @@ class WebHostDriver:
                 if not reason and prompt.startswith('/'):
                     reason = 'completed' if any(e.get('type') == 'command/done' for e in events) else None
                 self._stop(proc, lines, reader, log)
-                return {'answer': answer, 'finish_reason': reason, 'events': events,
-                        'server': {'name': 'deepseek-harness-web-host', 'version': self.config.get('app_version', 'unknown')}}
+                result = {'answer': answer, 'finish_reason': reason, 'events': events,
+                          'server': {'name': 'deepseek-harness-web-host', 'version': self.config.get('app_version', 'unknown')}}
+                if plugin:
+                    result['history_plugin'] = history_plugin.evidence(plugin,events)
+                return result
             finally:
                 # The root can exit before descendants release files or stdout.
                 self._kill(proc)
