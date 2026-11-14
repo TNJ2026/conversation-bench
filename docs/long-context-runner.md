@@ -6,7 +6,9 @@
 
 运行器默认使用本机 DSH CLI 的 `sdk` profile，通过标准输入输出上的 JSON-RPC 发送真实提示并等待结束，不调用当前评测助手来模拟目标回答，也不自动点击桌面应用。其结果标记为 `dsh-sdk`，不能冒充 DSH 桌面 UI 实测或与此前桌面配置已经对齐的实验。
 
-`--transport web` 改用同一安装随附的浏览器运行时：在独立 `DSH_HOME` 中以 `--profile web --no-open --port 0` 启动，读取启动时打印的 token 换取会话 cookie，再通过本地 `/api` 的 `client-request` 信封调用 `session/create`、`session/prompt`、`session/wait`、`session/events` 与 `commands/execute`；斜杠命令必须走 `commands/execute`，不能当作普通提示发送。历史超过一页时按 `beforeSeq` 向前翻页，直到覆盖本动作开始前的游标。结果标记为 `dsh-web-host`，仍不是桌面窗口实测：`--profile desktop` 由 Electron 应用独占，CLI 启动会被拒绝。`--transport web` 的实例运行在 `sandbox-exec` 外层边界里：默认放行，但拒绝读/写 `docs/`、`cases/`、`README*`、`~/.dsh`、`~/Library/Application Support/@deepseek-ai`、下载目录、`/private/tmp`，以及 `studies/` 下除本次运行外的历史目录。外层边界已覆盖隔离，因此子进程设置 `DSH_PERMISSION_MODE=danger-full-access` 关闭 DSH 自带的嵌套沙箱；否则内层 `sandbox-exec` 无法在沙箱内启动，目标连自己的会话日志都读不到，查回阶段失去意义。改动边界后应先用一次 `cat` 答案文档的探针确认返回拒绝。
+`--transport web` 改用同一安装随附的浏览器运行时，在独立 `DSH_HOME` 中启动 `web` profile 并通过本地 `/api` 执行，结果标记为 `dsh-web-host`，仍不是桌面窗口实测。macOS 外层使用 `sandbox-exec`：拒绝读写整个测试项目和当前运行目录，仅为当前分支自己的 `homes/<branch>` 子目录保留运行所需访问；因此任意名称的计划、后续新建的评分文件、原始日志和其他分支都受限制，而不依赖文件名前缀。仅为路径解析放行当前分支祖先目录的元信息，目录列表和文件内容仍被拒绝。任务工作区必须位于项目和运行目录之外。日常 DSH 状态、插件下载目录和 `/private/tmp` 也被拒绝。内层设为 Full access 是为避免双重 Seatbelt 嵌套，不能将这一设置理解为没有外层访问限制。SDK 传输仍需操作员保证访问隔离。
+
+每次动作结束，Web-host 会等待原进程正常退出、输出管道 EOF、读取线程结束，并检查同一进程组中没有仍在运行的后代。子进程即使已经关闭 stdout，也不能提前复制检查点。超时、进程组状态无法确认或仅被未处理的终止信号杀死，均视为停止未确认，禁止复制。
 
 该运行时公开的模型是 `deepseek-flash`（V4.1-Flash，effort off/low/high/max），与 SDK profile 的 `deepseek-v4-flash` 不同，两组数值不可直接比较。
 
@@ -79,3 +81,23 @@ python3 study.py long report --record studies/long-1/run.json
 ## 验证范围
 
 `python3 -m unittest -v` 中的自动运行测试启动一个独立的 JSON-RPC 协议夹具进程，覆盖连续发送、持久恢复、复制分支、原生压缩回执顺序、替代证据核验、闭卷工具违规、暂停追加、超时不重发、评分绑定和漏答规则。它不调用真实模型，不代表已测过某个已安装 DSH 或其压缩质量。真实 DSH 兼容性和完整产品实验仍需实际运行上述命令确认。
+
+
+## 细节回忆实验：使用修订后的 v7
+
+v6 的主题按工单编号每八项循环，能够由末尾负载推算早期答案，已停止接受新建或继续执行该版实验；旧文件与已完成记录保留，不能将其成绩解释为早期记忆保留率。评分旧记录时仍遵守其三档规则，不再接受部分分。
+
+v7 改查每个工单独有的16位回执码，使用未发给目标的私有种子通过 HMAC 生成。种子仅保存在操作员侧案例快照中；提示中只出现工单自身的回执码，不能由末尾工单或主题循环推算早期值。源材料、回执码、探针映射和档位声明都已冻结在案例文件中。
+
+```sh
+python3 study.py long create --case cases/long-context-compaction-qinglu-v7.json \
+  --transport web --model deepseek-v4-flash --effort low --load-batches 12 \
+  --output studies/detail-v7-1/plan.json
+python3 study.py long run --record studies/detail-v7-1/plan.json
+```
+
+必须至少包含12批。运行器在创建任何目录之前检查所有探针对应的原始工单及回执码是否已进入负载，运行时再核对源轮次的实际入场事件。检查点会记录每个探针对应的消息序号，压缩证明会逐项记录是否被替代；如果一个探针来源也没有被压缩，实验判为无效。末尾未压缩项可作为对照，但不能把它与被压缩项混为一谈。
+
+v7 明确声明只允许 `correct/unknown/wrong`；评分器从冻结案例读取允许档位，不再一律接受全局四档。判正确还须核对实际回答中的工单与回执码配对。该版不要求主管结论，`conclusions` 可留空并注明本版不适用。每个案例仍需人工核验来源和外部副作用。
+
+如需生成另一套材料，可在操作员环境调用 `longcase.build_detail_case()` 并将返回值另存 JSON，再通过 `--case` 指定；不要覆盖已执行实验的材料。保留其中私有种子可复现该材料，不要将完整案例或种子交给目标。

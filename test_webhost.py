@@ -2,6 +2,13 @@
 import json
 import tempfile
 import unittest
+import io
+import os
+import queue
+import signal
+import subprocess
+import sys
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
@@ -69,9 +76,15 @@ class WebHostTests(unittest.TestCase):
         self.assertEqual(result['server']['name'], 'deepseek-harness-web-host')
 
     def test_command_uses_the_command_endpoint(self):
+        WebHostDriver(self.config).perform(self.root/'home',self.root/'ws','id','hello',False,self.root/'first.jsonl')
         result = WebHostDriver(self.config).perform(self.root/'home', self.root/'ws', 'id', '/compact', True,
                                                     self.root/'wire.jsonl')
         self.assertTrue(any(e['type'] == 'turn/end' for e in result['events']))
+
+    def test_missing_restore_identity_does_not_create_fresh_history(self):
+        with self.assertRaisesRegex(DriverError,'refusing to create fresh history'):
+            WebHostDriver(self.config).perform(self.root/'home',self.root/'ws','id','hello',True,self.root/'wire.jsonl')
+        self.assertFalse((self.root/'home').exists())
 
     def test_unreachable_runtime_fails_loudly(self):
         self.fake.write_text('#!/bin/sh\nexit 1\n'); self.fake.chmod(0o755)
@@ -79,17 +92,98 @@ class WebHostTests(unittest.TestCase):
             WebHostDriver(self.config).perform(self.root/'home', self.root/'ws', 'id', 'x', False,
                                                self.root/'wire.jsonl')
 
+    def test_shutdown_timeout_never_returns_a_checkpointable_result(self):
+        self.fake.write_text(FAKE.replace('signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))',
+                                         'signal.signal(signal.SIGTERM, signal.SIG_IGN)'))
+        config=dict(self.config,shutdown_timeout=.15)
+        with self.assertRaisesRegex(DriverError,'checkpointing is unsafe'):
+            WebHostDriver(config).perform(self.root/'home',self.root/'ws','id','hello',False,self.root/'wire.jsonl')
+
     def test_sandbox_profile_denies_answer_key_and_other_runs(self):
         repo = Path(webhost_driver.__file__).resolve().parent
-        (self.root/'run.json').write_text('{}'); (self.root/'raw').mkdir(exist_ok=True)
-        (self.root/'homes').mkdir(exist_ok=True)
-        profile = webhost_driver.sandbox_profile(self.root/'homes'/'A', self.root/'ws')
+        run = self.root/'run'; home = run/'homes'/'A';home.mkdir(parents=True)
+        profile = webhost_driver.sandbox_profile(home, self.root/'ws')
         self.assertNotIn('(deny default)', profile)
-        self.assertIn(str(repo/'docs').replace('"', '\\"'), profile)
+        self.assertIn('(subpath '+json.dumps(str(repo))+')', profile)
         self.assertIn('/private/tmp', profile)
-        self.assertIn('run.json', profile)
-        self.assertIn('raw', profile)
+        self.assertIn('(subpath '+json.dumps(str(run.resolve()))+')', profile)
+        self.assertIn('(require-not (subpath '+json.dumps(str(home.resolve()))+'))', profile)
         self.assertIn('(deny file-read*', profile)
+
+    @unittest.skipUnless(sys.platform=='darwin' and Path('/usr/bin/sandbox-exec').exists(),'Seatbelt integration requires macOS')
+    def test_native_sandbox_blocks_arbitrary_records_and_sibling_branch_answers(self):
+        with tempfile.TemporaryDirectory(dir=Path.home()/'Library'/'Caches',prefix='bench-isolation-test-') as temp:
+            root=Path(temp);run=root/'run';home=run/'homes'/'B';home.mkdir(parents=True)
+            other=run/'homes'/'A'/'sessions';other.mkdir(parents=True)
+            own=home/'own.txt';own.write_text('own state')
+            answer=other/'answer.txt';answer.write_text('synthetic other-branch answer')
+            plan=run/'anything.json';plan.write_text('synthetic answer key')
+            workspace=root/'workspace';workspace.mkdir()
+            profile=root/'test.sb';profile.write_text(webhost_driver.sandbox_profile(home,workspace))
+            late=run/'created-after-policy.json';late.write_text('synthetic late record')
+            alias=home/'alias';alias.symlink_to(answer)
+            def read(path):
+                return subprocess.run(['/usr/bin/sandbox-exec','-f',str(profile),'/bin/cat',str(path)],capture_output=True).returncode
+            self.assertEqual(read(own),0)
+            for path in (answer,plan,late,alias):
+                with self.subTest(path=path):self.assertNotEqual(read(path),0)
+            metadata=subprocess.run(['/usr/bin/sandbox-exec','-f',str(profile),'/usr/bin/stat','-f','%N',str(run)],capture_output=True)
+            listing=subprocess.run(['/usr/bin/sandbox-exec','-f',str(profile),'/bin/ls',str(run)],capture_output=True)
+            self.assertEqual(metadata.returncode,0)
+            self.assertNotEqual(listing.returncode,0)
+
+    @unittest.skipUnless(os.name=='posix','Process-group lifecycle requires POSIX')
+    def test_stop_waits_for_descendant_flush_even_without_inherited_stdout(self):
+        script=r'''
+import os,signal,sys,time
+from pathlib import Path
+if os.fork()==0:
+ def stop(*args):
+  time.sleep(.8)
+  Path(sys.argv[1]).write_text('flushed')
+  sys.exit(0)
+ signal.signal(signal.SIGTERM,stop)
+ print('child ready',flush=True)
+ if sys.argv[2]=='redirect':os.dup2(os.open(os.devnull,os.O_WRONLY),1)
+ while True:time.sleep(.05)
+else:
+ signal.signal(signal.SIGTERM,lambda *args:sys.exit(0))
+ print('parent ready',flush=True)
+ while True:time.sleep(.05)
+'''
+        for mode in ('inherited','redirect'):
+            with self.subTest(mode=mode):
+                flushed=self.root/('flush-'+mode)
+                proc=subprocess.Popen([sys.executable,'-c',script,str(flushed),mode],stdout=subprocess.PIPE,text=True,start_new_session=True)
+                lines=queue.Queue()
+                def pump():
+                    for line in proc.stdout:lines.put(line)
+                    lines.put(None)
+                reader=Thread(target=pump,daemon=True);reader.start()
+                try:
+                    lines.get(timeout=5);lines.get(timeout=5)
+                    driver=WebHostDriver({'shutdown_timeout':5})
+                    driver._stop(proc,lines,reader,io.StringIO())
+                    self.assertTrue(flushed.exists())
+                    self.assertFalse(reader.is_alive())
+                    self.assertFalse(driver._group_alive(proc))
+                finally:
+                    WebHostDriver._kill(proc);reader.join(2);proc.stdout.close()
+
+    @unittest.skipUnless(os.name=='posix','Process-group lifecycle requires POSIX')
+    def test_unhandled_termination_is_not_a_clean_checkpoint(self):
+        proc=subprocess.Popen([sys.executable,'-c','import time;print("ready",flush=True);time.sleep(10)'],stdout=subprocess.PIPE,text=True,start_new_session=True)
+        lines=queue.Queue()
+        def pump():
+            for line in proc.stdout:lines.put(line)
+            lines.put(None)
+        reader=Thread(target=pump,daemon=True);reader.start()
+        try:
+            lines.get(timeout=5)
+            with self.assertRaisesRegex(DriverError,'checkpointing is unsafe'):
+                WebHostDriver({})._stop(proc,lines,reader,io.StringIO())
+        finally:
+            WebHostDriver._kill(proc);reader.join(2);proc.stdout.close()
 
 if __name__ == '__main__':
     unittest.main()

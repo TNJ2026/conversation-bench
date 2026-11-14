@@ -182,6 +182,9 @@ python3 study.py long report --record studies/long-1/run.json
 
 `longcase.py` 重新生成该JSON中的合成负载，不改动手写的轮次、探针和评分口径。12批仍不足以触发压缩时，`python3 longcase.py --extra N` 输出N批新编号的追加负载，不改写案例文件。
 
+
+细节回忆实验请使用 `--case cases/long-context-compaction-qinglu-v7.json --load-batches 12`。v7 查询工单独有的回执码，校验原始材料覆盖和三档评分；旧 v6 因可由尾部规律推断答案而退役，仅保留历史材料，禁止新建或继续执行。详见[修订协议](docs/long-context-runner.md)。
+
 ## 项目自检
 
 ```sh

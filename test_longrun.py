@@ -16,7 +16,7 @@ FAKE = r'''#!/usr/bin/env python3
 import json,os,sys
 from pathlib import Path
 home=Path(os.environ['DSH_HOME']); file=home/'session.json'
-state=json.loads(file.read_text()) if file.exists() else {'seq':0,'seeds':{},'prompts':[]}
+state=json.loads(file.read_text()) if file.exists() else {'seq':0,'seeds':{},'prompts':[],'sources':[]}
 def send(x): print(json.dumps(dict(jsonrpc='2.0',**x),ensure_ascii=False),flush=True)
 def event(kind,data,**kw):
  state['seq']+=1
@@ -36,7 +36,7 @@ for line in sys.stdin:
   if text=='/compact':
    event('command/run',{'commandId':'compact-1'})
    event('compaction/start',{'compactionId':'c1'})
-   seq=event('compaction/summary',{'compactionId':'c1','summary':'Synthetic summary for transport testing only.','shadowedSeqs':list(state['seeds'].values())})
+   seq=event('compaction/summary',{'compactionId':'c1','summary':'Synthetic summary for transport testing only.','shadowedSeqs':state['sources']})
    event('user/message',{'content':[{'type':'text','text':'Synthetic summary'}]},surfaceOp={'op':'replace','startSeq':0,'endSeq':seq-1},sourceEventSeqs=[seq])
    event('compaction/end',{'compactionId':'c1'})
    event('command/done',{'commandId':'compact-1'})
@@ -49,6 +49,7 @@ for line in sys.stdin:
    event('agent/inbox/spliced',{'inserted':[{'id':mid}]})
    event('turn/start',{})
    seq=event('user/message',{'content':[{'type':'text','text':text}]})
+   state['sources'].append(seq)
    if len(state['prompts'])<3: state['seeds'][str(len(state['prompts']))]=seq
    state['prompts'].append(text)
    event('assistant/message',{'message':{'content':[{'type':'text','text':'Synthetic response; not an evaluated model answer.'}]}})
@@ -95,7 +96,7 @@ class LongRunnerTests(unittest.TestCase):
         for stages in scores['grades'].values():
             for anchors in stages.values():
                 for item in anchors.values(): item.update({'grade':'unknown','evidence':'Synthetic response provides no anchor answer.'})
-                anchors['nonce']['omitted'] = True
+                anchors['nonce' if 'nonce' in anchors else 'f1']['omitted'] = True
         longrun.save(path,scores)
         return path,scores
 
@@ -128,6 +129,48 @@ class LongRunnerTests(unittest.TestCase):
         self.assertEqual(len(self.state()['results']),13)
         with self.assertRaises(ValueError): longrun.extend(self.path,1)
 
+    def create_detail(self, batches=12):
+        import longcase
+        path=self.root/'detail-run'/'plan.json'
+        args=argparse.Namespace(output=str(path),model='fixture-model',provider='fixture-provider',effort='low',
+                                dsh_bin=str(self.fake),load_batches=batches,seed=42,timeout=5,casefile=str(longcase.DETAIL_CASE))
+        with patch.object(longrun,'__file__',str(self.root/'project'/'longrun.py')):
+            longrun.create(args)
+        self.path=path
+
+    def test_insufficient_detail_load_is_rejected_without_creating_a_run(self):
+        with self.assertRaisesRegex(ValueError,'more load'):
+            self.create_detail(batches=1)
+        self.assertFalse((self.root/'detail-run').exists())
+
+    def test_detail_run_validates_admission_coverage_and_three_grade_rubric(self):
+        self.create_detail();longrun.run(self.path)
+        state=self.state()
+        self.assertEqual(len(state['checkpoint']['anchor_sequences']),10)
+        self.assertTrue(all(state['results']['B/compact']['compaction_proof']['anchor_coverage'].values()))
+        path,scores=self.finish_grades()
+        mark=scores['grades']['A']['recall']['f1']
+        mark.update(grade='partial',omitted=False);longrun.save(path,scores)
+        with self.assertRaisesRegex(ValueError,'valid category'):
+            longrun.grade(self.path,path)
+        mark['grade']='correct';longrun.save(path,scores)
+        with self.assertRaisesRegex(ValueError,'ticket/receipt pair'):
+            longrun.grade(self.path,path)
+        mark['grade']='unknown';longrun.save(path,scores);longrun.grade(self.path,path)
+        self.assertEqual(self.state()['metrics']['B']['recall']['partial'],0)
+        self.assertEqual(self.state()['metrics']['B']['recall']['retention'],0)
+
+    def test_detail_probes_require_a_compacted_source_not_only_compacted_seeds(self):
+        self.create_detail()
+        def mutate(prompt,result):
+            if prompt=='/compact':
+                for event in result['events']:
+                    if event['type']=='compaction/summary':
+                        event['data']['shadowedSeqs']=list(self.state()['seed_sequences'].values())
+        with self.assertRaisesRegex(ValueError,'No probed source'):
+            longrun.run(self.path,driver=self.driver(mutate))
+        self.assertEqual(self.state()['status'],'invalid')
+
     def test_summary_without_history_replacement_is_invalid(self):
         def mutate(prompt,result):
             if prompt=='/compact': result['events']=[e for e in result['events'] if not isinstance(e.get('surfaceOp'),dict)]
@@ -154,7 +197,7 @@ class LongRunnerTests(unittest.TestCase):
         def mutate(prompt,result):
             if prompt=='/compact':
                 for event in result['events']:
-                    if event['type']=='compaction/summary': event['data']['shadowedSeqs'].pop()
+                    if event['type']=='compaction/summary': event['data']['shadowedSeqs'].remove(next(iter(self.state()['seed_sequences'].values())))
         with self.assertRaisesRegex(ValueError,'three seed'):
             longrun.run(self.path,driver=self.driver(mutate))
         self.assertEqual(self.state()['status'],'invalid')

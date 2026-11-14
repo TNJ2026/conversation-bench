@@ -17,33 +17,36 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+from dsh_driver import DriverError
 
 BOOT_URL = re.compile(r'(http://127\.0\.0\.1:\d+)/\?token=([A-Za-z0-9_-]+)')
 def sandbox_profile(home, workspace):
-    """Allow the host by default but deny the answer key, other runs, and user state."""
+    """Deny operator material and sibling branches, regardless of record filenames."""
     home = Path(home).resolve()
+    workspace = Path(workspace).resolve()
     repo = Path(__file__).resolve().parent
     run_root = home.parent.parent
-    denied = [repo/'docs', repo/'cases', repo/'README.md', repo/'README.zh-CN.md', repo/'cases-v2.json',
-              Path.home()/'.dsh', Path.home()/'Library'/'Application Support'/'@deepseek-ai',
+    if home.parent.name != 'homes' or workspace.is_relative_to(run_root) or workspace.is_relative_to(repo):
+        raise DriverError('Sandbox needs a homes/<branch> runtime and a task workspace outside operator records.')
+    if run_root.is_relative_to(workspace) or repo.is_relative_to(workspace):
+        raise DriverError('Task workspace must not contain the test repository or operator records.')
+    denied = [Path.home()/'.dsh', Path.home()/'Library'/'Application Support'/'@deepseek-ai',
               Path.home()/'Downloads'/'deepseek-harness-plugins', Path('/private/tmp')]
-    if run_root.is_dir():
-        denied += [entry for entry in run_root.iterdir()
-                   if entry.name.startswith(('run.', 'scores', 'report')) or entry.name == 'raw']
-    studies = repo/'studies'
-    if studies.is_dir():
-        denied += [child for child in studies.iterdir()
-                   if child.is_file() or child.resolve() != run_root]
+    quote = lambda p: json.dumps(str(p), ensure_ascii=False)
     lines = ['(version 1)', '(allow default)']
+    for path in (repo, run_root):
+        # The profile's own home is needed by DSH. No other part of either tree is visible.
+        condition = '(require-all (subpath %s) (require-not (subpath %s)))' % (quote(path), quote(home))
+        # realpath/lstat must traverse home ancestors; their directory contents remain hidden.
+        ancestors = [parent for parent in home.parents if parent.is_relative_to(path)]
+        reads = '(require-all %s %s)' % (condition, ' '.join('(require-not (literal %s))' % quote(p) for p in ancestors)) if ancestors else condition
+        lines.append('(deny file-read* %s)' % reads)
+        lines.append('(deny file-read-data %s)' % condition)
+        lines.append('(deny file-write* %s)' % condition)
     for path in denied:
-        escaped = str(path).replace('"', '\\"')
-        lines.append('(deny file-read* (subpath "%s"))' % escaped)
-        lines.append('(deny file-write* (subpath "%s"))' % escaped)
+        lines.append('(deny file-read* (subpath %s))' % quote(path))
+        lines.append('(deny file-write* (subpath %s))' % quote(path))
     return '\n'.join(lines) + '\n'
-
-
-class DriverError(RuntimeError):
-    pass
 
 
 def text_of(message):
@@ -59,6 +62,9 @@ class WebHostDriver:
 
     def perform(self, home, workspace, session_id, prompt, resume, transcript):
         home, workspace = Path(home).resolve(), Path(workspace).resolve()
+        state_path = home/'web-session.json'
+        if resume and (not state_path.is_file() or not json.loads(state_path.read_text()).get('sessionId')):
+            raise DriverError('Cannot resume: persisted web session identity is missing; refusing to create fresh history.')
         home.mkdir(parents=True, exist_ok=True)
         workspace.mkdir(parents=True, exist_ok=True)
         transcript.parent.mkdir(parents=True, exist_ok=True)
@@ -87,12 +93,12 @@ class WebHostDriver:
                 finally:
                     lines.put(None)
 
-            threading.Thread(target=pump, daemon=True).start()
+            reader = threading.Thread(target=pump, daemon=True)
+            reader.start()
             try:
                 base, token = self._boot(lines, deadline, log, proc)
                 client = _Client(base, token, deadline, log)
                 client.connect()
-                state_path = home/'web-session.json'
                 stored = json.loads(state_path.read_text()) if state_path.exists() else {}
                 sid = stored.get('sessionId')
                 if sid is None:
@@ -126,12 +132,15 @@ class WebHostDriver:
                                    if event.get('type') == 'command/done'), '')
                 if not reason and prompt.startswith('/'):
                     reason = 'completed' if any(e.get('type') == 'command/done' for e in events) else None
-                self._stop(proc, lines)
+                self._stop(proc, lines, reader, log)
                 return {'answer': answer, 'finish_reason': reason, 'events': events,
                         'server': {'name': 'deepseek-harness-web-host', 'version': self.config.get('app_version', 'unknown')}}
             finally:
-                if proc.poll() is None:
-                    self._kill(proc)
+                # The root can exit before descendants release files or stdout.
+                self._kill(proc)
+                reader.join(timeout=5)
+                if not reader.is_alive():
+                    proc.stdout.close()
 
     @staticmethod
     def _events_since(client, sid, before):
@@ -169,7 +178,15 @@ class WebHostDriver:
                 self._token_url = line.strip()
                 return match.group(1), match.group(2)
 
-    def _stop(self, proc, lines):
+    @staticmethod
+    def _group_alive(proc):
+        if os.name == 'nt':
+            raise DriverError('Web checkpointing requires POSIX process-group inspection.')
+        status = subprocess.run(['ps','-axo','pgid=,stat='],capture_output=True,text=True,timeout=2,check=True)
+        return any(int(fields[0]) == proc.pid and not fields[1].startswith('Z')
+                   for line in status.stdout.splitlines() if len(fields := line.split()) >= 2)
+
+    def _stop(self, proc, lines, reader, log):
         if os.name == 'nt':
             proc.terminate()
         else:
@@ -177,25 +194,41 @@ class WebHostDriver:
                 os.killpg(proc.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-        try:
-            proc.wait(timeout=20)
-        except subprocess.TimeoutExpired:
-            self._kill(proc)
-            raise DriverError('The runtime did not stop cleanly; checkpointing is unsafe.') from None
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + self.config.get('shutdown_timeout',20)
+        eof = False
         while time.monotonic() < deadline:
             try:
-                lines.get(timeout=0.2)
+                line = lines.get(timeout=0.05)
+                if line is None:
+                    eof = True
+                else:
+                    log.write(line); log.flush()
             except queue.Empty:
-                break
-        if proc.returncode not in (0, -signal.SIGTERM):
+                pass  # Silence is not evidence that a process has stopped.
+            if proc.poll() is not None and eof:
+                try:
+                    alive = self._group_alive(proc)
+                except (OSError,subprocess.SubprocessError) as error:
+                    raise DriverError('Cannot confirm process-group shutdown; checkpointing is unsafe.') from error
+                if not alive:
+                    reader.join(timeout=1)
+                    if not reader.is_alive():
+                        break
+        else:
+            self._kill(proc)
+            raise DriverError('The runtime group or output reader did not stop; checkpointing is unsafe.')
+        if proc.returncode != 0:
             raise DriverError('The runtime exited with status %r; checkpointing is unsafe.' % (proc.returncode,))
 
     @staticmethod
     def _kill(proc):
+        running = proc.poll() is None  # Reap the root before inspecting an otherwise zombie-only group.
+        if os.name != 'nt' and not running and not WebHostDriver._group_alive(proc):
+            return
         try:
             if os.name == 'nt':
-                proc.kill()
+                if running:
+                    proc.kill()
             else:
                 os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:

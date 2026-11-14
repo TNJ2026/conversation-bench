@@ -6,6 +6,7 @@ import html
 import json
 from pathlib import Path
 import random
+import re
 import shutil
 import time
 import uuid
@@ -59,6 +60,32 @@ def files(folder):
     return result
 
 
+def allowed_grades(case):
+    # Frozen v6 runs predate the explicit field, but their published rubric forbids partial.
+    default = ('correct','unknown','wrong') if case.get('id','').endswith('-v6') else GRADES
+    values = case.get('allowed_grades',default)
+    if not isinstance(values,(tuple,list)) or not values or len(set(values)) != len(values) or not set(values).issubset(GRADES):
+        raise ValueError('Case allowed_grades is invalid.')
+    return tuple(values)
+
+
+def validate_prefix(case, prefix):
+    if case.get('id','').endswith('-v6'):
+        raise ValueError('Legacy v6 periodic-topic probes are deprecated; create a new run with the v7 receipt case.')
+    allowed_grades(case)
+    if case.get('generation',{}).get('kind') == 'keyed-receipts' and set(case.get('probe_anchors',{})) != set(case['expected']):
+        raise ValueError('Every receipt probe must declare its original source turn.')
+    turns = {turn['id']:turn['prompt'] for turn in prefix}
+    count = sum(turn['id'].startswith('load-') for turn in prefix)
+    if count < case.get('minimum_load_batches',0):
+        raise ValueError('Selected load does not contain every probed ticket; more load batches are required.')
+    for anchor, spec in case.get('probe_anchors',{}).items():
+        source = turns.get(spec['source_turn'],'')
+        pattern = rf'^工单 {re.escape(spec["ticket"])}｜[^\n]*回执码：{re.escape(case["expected"][anchor])}。'
+        if not re.search(pattern,source,re.M):
+            raise ValueError('A probe anchor is absent from its declared source turn: '+anchor)
+
+
 def create(args):
     path = Path(args.output).resolve()
     if path.parent.exists():
@@ -66,6 +93,11 @@ def create(args):
     if not args.model.strip() or not args.provider.strip() or args.load_batches < 1:
         raise ValueError('Model, provider and a positive load-batch count are required.')
     case = load(getattr(args,'casefile',None) or longcase.CASE)
+    pressure = case['pressure_turns'][:args.load_batches]
+    if args.load_batches > len(pressure):
+        pressure += longcase.extra_batches(case,args.load_batches-len(pressure),first=len(pressure)+1)
+    prefix = case['seed_turns']+pressure
+    validate_prefix(case,prefix)
     root = path.parent
     root.mkdir(parents=True)
     identity = uuid.uuid4().hex
@@ -74,9 +106,6 @@ def create(args):
     workspace.mkdir(parents=True, exist_ok=False)
     order = list(BRANCHES)
     random.Random(args.seed).shuffle(order)
-    pressure = case['pressure_turns'][:args.load_batches]
-    if args.load_batches > len(pressure):
-        pressure += longcase.batches(args.load_batches-len(pressure), first=len(pressure)+1)
     transport = getattr(args,'transport','sdk')
     state = {'version':1, 'id':identity,
              'method':'dsh-web-host' if transport == 'web' else 'dsh-sdk', 'case':case, 'case_hash':digest(case),
@@ -85,8 +114,8 @@ def create(args):
                        'profile':'web' if transport == 'web' else 'sdk', 'transport':transport,
                        'app_version':getattr(args,'app_version','unverified')},
              'workspace':str(workspace), 'initial_files':files(workspace),
-             'prefix':case['seed_turns']+pressure, 'branch_order':order, 'results':{},
-             'seed_sequences':{}, 'checkpoint':None, 'pending':None, 'status':'ready', 'problems':[]}
+             'prefix':prefix, 'branch_order':order, 'results':{},
+             'seed_sequences':{}, 'prefix_sequences':{}, 'checkpoint':None, 'pending':None, 'status':'ready', 'problems':[]}
     save(path, state)
     print(path)
 
@@ -114,11 +143,16 @@ def extend(path, count):
         if count < 1 or state['checkpoint'] is not None or state['pending'] or state['status'] in ('completed','invalid','attention'):
             raise ValueError('Append positive load only before checkpointing a run with no uncertain action.')
         current = len(state['prefix'])-len(state['case']['seed_turns'])
-        state['prefix'] += longcase.batches(count, first=current+1)
+        state['prefix'] += longcase.extra_batches(state['case'],count,first=current+1)
+        validate_prefix(state['case'],state['prefix'])
         save(path, state)
 
 
 def checkpoint(path, state):
+    validate_prefix(state['case'],state['prefix'])
+    for spec in state['case'].get('probe_anchors',{}).values():
+        if spec['source_turn'] not in state.get('prefix_sequences',{}):
+            raise ValueError('A probed source turn has no durable admission evidence.')
     source = path.parent/'homes'/'prefix'
     if not source.is_dir():
         raise ValueError('No stopped runtime home is available to clone.')
@@ -143,6 +177,8 @@ def checkpoint(path, state):
                            'history_sha256':digest([r['events'] for r in prefix]),
                            'history_hash_method':'Exact captured prefix event envelopes; byte-identical persisted homes establish the shared checkpoint, not an inferred request reconstruction.',
                            'seed_sequences':dict(state['seed_sequences'])}
+    state['checkpoint']['anchor_sequences'] = {a:state['prefix_sequences'][spec['source_turn']]
+                                               for a,spec in state['case'].get('probe_anchors',{}).items()}
     save(path, state)
 
 
@@ -189,15 +225,23 @@ def validate_result(state, key, prompt, result):
     events = result['events']
     if key != 'B/compact' and any(e.get('type', '').startswith('compaction/') for e in events):
         raise ValueError('Unexpected automatic compaction; the uncompacted control or probe is no longer equivalent.')
-    if key.startswith('prefix/seed-'):
+    if key.startswith('prefix/'):
         matches = [e['seq'] for e in events if e.get('type') == 'user/message' and text_content(e) == prompt]
         if len(matches) != 1:
-            raise ValueError('Cannot locate the admitted seed message in durable events.')
-        state['seed_sequences'][key.split('/')[1]] = matches[0]
+            raise ValueError('Cannot locate the admitted prefix message in durable events.')
+        turn_id = key.split('/')[1]
+        state.setdefault('prefix_sequences',{})[turn_id] = matches[0]
+        if turn_id.startswith('seed-'):
+            state['seed_sequences'][turn_id] = matches[0]
     if key == 'B/compact':
         if len(state['seed_sequences']) != len(state['case']['seed_turns']):
             raise ValueError('Seed sequence evidence is incomplete.')
         result['compaction_proof'] = compact_proof(events, state['seed_sequences'])
+        summary_seq = result['compaction_proof']['summary_seq']
+        covered = next(e['data']['shadowedSeqs'] for e in events if e.get('seq') == summary_seq)
+        result['compaction_proof']['anchor_coverage'] = {a:seq in covered for a,seq in state['checkpoint'].get('anchor_sequences',{}).items()}
+        if result['compaction_proof']['anchor_coverage'] and not any(result['compaction_proof']['anchor_coverage'].values()):
+            raise ValueError('No probed source message was actually compacted; the detail comparison is invalid.')
     if key.endswith('/recall') and any(e.get('type') in ('tool/call','tool/ptc-dispatch') for e in events):
         raise ValueError('Closed-book recall invoked tools; its closed-book protocol is invalid.')
     if files(Path(state['workspace'])) != state['initial_files']:
@@ -209,6 +253,7 @@ def run(path, max_actions=None, driver=None):
         state = load(path)
         if digest(state['case']) != state['case_hash']:
             raise ValueError('The frozen case snapshot changed; start a new plan.')
+        validate_prefix(state['case'],state['prefix'])
         if state['pending']:
             raise ValueError('Previous target action has an uncertain outcome; inspect raw logs. Automatic resend is forbidden.')
         if state['status'] in ('invalid','attention','completed'):
@@ -264,6 +309,7 @@ def grade(path, score_path=None):
     if state['status'] != 'completed':
         raise ValueError('Only a completed, protocol-checked run can receive final grades.')
     template = {'run_id':state['id'], 'case_hash':state['case_hash'], 'answers_sha256':answer_manifest(state),
+                'allowed_grades':allowed_grades(state['case']),
                 'protocol':{key:{'pass':None,'evidence':''} for key in ('unexposed','no_external_writes_or_learning','equivalent_configuration')},
                 'conclusions':{b:{'text':None,'evidence':''} for b in BRANCHES},
                 'rubric':state['case']['scoring'], 'required_points':state['case']['required_points'], 'grades':{}}
@@ -318,7 +364,7 @@ def grade(path, score_path=None):
                 if not isinstance(mark, dict):
                     raise ValueError('Each anchor grade must be an object, not a bare score or null.')
                 value = mark.get('grade')
-                if value not in GRADES or not isinstance(mark.get('evidence'), str) or len(''.join(mark['evidence'].split())) < 6:
+                if value not in allowed_grades(state['case']) or not isinstance(mark.get('evidence'), str) or len(''.join(mark['evidence'].split())) < 6:
                     raise ValueError('Every grade needs a valid category and concrete evidence (at least 6 non-whitespace characters).')
                 if type(mark.get('omitted')) is not bool or type(mark.get('retrieved')) is not bool:
                     raise ValueError('Omitted and retrieved must be booleans.')
@@ -329,6 +375,11 @@ def grade(path, score_path=None):
                         raise ValueError('Exact-text anchors do not permit partial credit.')
                     if value == 'correct' and state['case']['expected'][anchor] not in result['answer']:
                         raise ValueError('An exact-text pass contradicts the actual answer.')
+                spec = state['case'].get('probe_anchors',{}).get(anchor)
+                if spec and value == 'correct':
+                    pattern = re.escape(spec['ticket'])+r'\s*[:：]\s*'+re.escape(state['case']['expected'][anchor])+r'(?![0-9A-Za-z])'
+                    if not re.search(pattern,result['answer']):
+                        raise ValueError('A receipt pass contradicts the ticket/receipt pair in the answer.')
                 if mark['retrieved'] and (stage != 'recovery' or not tools or not isinstance(mark.get('sources'), list)
                                           or not mark['sources'] or not all(isinstance(s,str) and s.strip() for s in mark['sources'])):
                     raise ValueError('Claimed retrieval needs recorded tools and concrete source locations in the recovery stage.')

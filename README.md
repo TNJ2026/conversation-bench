@@ -194,6 +194,9 @@ Omitted answers are recorded separately as instruction omissions and graded unkn
 
 `longcase.py` regenerates the synthetic load in that JSON and leaves the hand-written turns, probes, and scoring untouched. If twelve batches are not enough to reach compaction, `python3 longcase.py --extra N` prints N further batches with new ticket numbers without rewriting the case file.
 
+
+For detail-recall experiments, use `--case cases/long-context-compaction-qinglu-v7.json --load-batches 12`. V7 queries unique keyed receipts rather than periodic topic labels. All queried source tickets must be supplied, and the runner enforces the case's three allowed grades. Legacy V6 is retained for historical reference but cannot start or continue a new trial because its answers can be inferred from later batches. See the [updated protocol](docs/long-context-runner.md).
+
 ## Run the project checks
 
 ```sh
