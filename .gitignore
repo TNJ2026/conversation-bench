@@ -50,3 +50,9 @@ dist/
 *.log
 *.tmp
 *.temp
+
+# Local migration archives and runtime credential stores
+/conversation-bench-archive-*/
+/migration-*.json
+/migration-edits-before/
+.credentials.yaml

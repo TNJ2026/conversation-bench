@@ -58,8 +58,9 @@ def text_of(message):
 class WebHostDriver:
     """One stopped runtime per action so the isolated home can be checkpointed."""
 
-    def __init__(self, config):
+    def __init__(self, config, environment=None):
         self.config = config
+        self.environment = dict(environment or {})
 
     def perform(self, home, workspace, session_id, prompt, resume, transcript):
         home, workspace = Path(home).resolve(), Path(workspace).resolve()
@@ -70,14 +71,24 @@ class WebHostDriver:
         workspace.mkdir(parents=True, exist_ok=True)
         transcript.parent.mkdir(parents=True, exist_ok=True)
         deadline = time.monotonic() + self.config['timeout']
-        env = dict(os.environ, DSH_HOME=str(home))
+        env = dict(os.environ, **self.environment)
+        env['DSH_HOME'] = str(home)
         if self.config.get('sandbox', True):
             # The outer sandbox is the boundary; disable the nested one so bash keeps working.
             env['DSH_PERMISSION_MODE'] = 'danger-full-access'
         unwrapped = [self.config['dsh_bin'], '--profile', 'web']
         plugin = self.config.get('history_plugin') if self.config.get('history_plugin_active') else None
+        runtime_patch = self.config.get('runtime_patch')
         if plugin:
             patch = history_plugin.stage(home,plugin)
+        if runtime_patch:
+            supplied_patch = Path(runtime_patch['path'])
+            patch = supplied_patch.resolve()
+            if (supplied_patch.is_symlink() or not patch.is_relative_to(home) or not patch.is_file()
+                    or not isinstance(runtime_patch.get('ready_marker'), str) or not runtime_patch['ready_marker'].strip()):
+                raise DriverError('Runtime patch must be a regular file in this isolated home.')
+            unwrapped += ['--patch', str(patch)]
+        elif plugin:
             unwrapped += ['--patch',str(patch)]
         unwrapped += ['--no-open', '--port', '0']
         if self.config.get('sandbox', True):
@@ -103,6 +114,10 @@ class WebHostDriver:
             reader.start()
             try:
                 base, token = self._boot(lines, deadline, log, proc)
+                if runtime_patch:
+                    log.flush()
+                    if runtime_patch['ready_marker'] not in transcript.read_text(encoding='utf-8'):
+                        raise DriverError('Runtime patch registration was not observed.')
                 if plugin:
                     log.flush()
                     marker = 'BENCH_CURRENT_HISTORY_READY '+plugin['version']

@@ -1,5 +1,7 @@
 # 桌面会话体验对照测试 v2
 
+> 当前本地目录：`/Users/cxd/develop/conversation-bench`。推荐从[有界证据直接交付](docs/bounded-delivery.md)开始，默认一次生成，修复需显式`--repair`。见[已完成配对结果](docs/bounded-delivery-results.md)；旧迁移说明保留用于历史追溯。
+
 [中文](README.zh-CN.md) | [English](README.md)
 
 Python 3.9+，无第三方依赖。新版入口为 `study.py`。支持 DeepSeek Harness（`dsh`）、ChatGPT（`chatgpt`）和 Hermes（`hermes`）。包含六类场景，每类三个不同案例；默认两款应用共36次会话，也可单独测试一款（18次）或三款同题对照（54次）。提供逐轮提示、独立材料目录、产物快照、协议分组、对照报告和匿名文本评审导出。短会话套件由操作员操作桌面应用，不模拟用户自答，也不自动点击应用或直接调用模型API；另提供通过 DSH SDK profile 连续执行的长会话自动运行器。
@@ -192,6 +194,8 @@ python3 study.py long report --record studies/long-1/run.json
 ## 陌生材料与交错对照（v9）
 
 [V9](docs/transfer-v9.md)新增三份冻结的维保交接材料，更换编号、约束与码值，覆盖跨行、同一行邻接、旧版替代及重复命中；评分为10个精确回执与3项交接条件。`transfercase.py prepare`只准备六个0.1.0/0.1.1成对交错计划，`transfercase.py run`才执行真实模型调用。启动前校验输入、插件与运行器源码。另见[0.1.1结果归档](docs/current-history-plugin-results-0.1.1.md)与[完整测试流程](docs/plugin-test-workflow.md)。
+
+已完成[有界证据交付与可选修复](docs/bounded-delivery.md)：程序生成限长原文证据包，默认一次直接生成，只有`--repair`才追加末段修复。相同证据的12次配对中两组均6/6完整交付，追加修复耗时1.91倍、token为2.24倍，未观察到完整交付收益；结果为AI非盲复核，详见[结果摘要](docs/bounded-delivery-results.md)。旧失败和冻结实验保持不变。
 
 ## 项目自检
 

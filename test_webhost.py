@@ -87,6 +87,21 @@ class WebHostTests(unittest.TestCase):
         self.assertNotIn('history_plugin',result)
         self.assertFalse((self.root/'inactive'/'bench-current-history').exists())
 
+    def test_runtime_patch_needs_local_file_and_observed_marker(self):
+        home = self.root/'controlled'; home.mkdir()
+        local = home/'patch.yml'; local.write_text('[]\n')
+        config = dict(self.config, runtime_patch={'path':str(local),'ready_marker':'BENCH_FIXTURE_READY'})
+        with self.assertRaisesRegex(DriverError,'Runtime patch registration'):
+            WebHostDriver(config).perform(home,self.root/'ws',None,'hello',False,self.root/'patch.log')
+        self.fake.write_text(FAKE.replace('server = HTTPServer',
+            'print("BENCH_FIXTURE_READY",flush=True)\nserver = HTTPServer'))
+        result = WebHostDriver(config).perform(home,self.root/'ws',None,'hello',False,self.root/'patch-ok.log')
+        self.assertEqual(result['answer'],'ok')
+        link = home/'linked.yml'; link.symlink_to(local)
+        config['runtime_patch']['path'] = str(link)
+        with self.assertRaisesRegex(DriverError,'regular file'):
+            WebHostDriver(config).perform(home,self.root/'ws',None,'hello',False,self.root/'patch-link.log')
+
     def test_one_action_creates_session_and_returns_filtered_events(self):
         result = WebHostDriver(self.config).perform(self.root/'home', self.root/'ws', 'id', 'hello', False,
                                                     self.root/'wire.jsonl')
