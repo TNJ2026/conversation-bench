@@ -201,6 +201,10 @@ For detail-recall experiments, use `--case cases/long-context-compaction-qinglu-
 
 [V8 / V8.1 protocol and commands](docs/task-success-v8.md) adds a project handoff task using the existing isolated A/A_repeat/B runner. It checks current decisions, evidence, and actionable next steps. All ten acceptance conditions must pass for full delivery success; passing nine is still incomplete. Closed-book delivery and assisted recovery are reported separately. Protocol-invalid runs have no valid success rate. V7 remains a separate exact-recall benchmark. Original V8 results are exploratory due to an ambiguous receipt instruction. Use the frozen V8.1 case for new baselines: it clarifies the placeholder and accepts common emphasis, bracket, and label presentation while requiring the correct ticket/receipt pair on the same line. Old cases and scoring rules remain unchanged. V8.1 has local baseline records with a separate non-blind AI review and unresolved items. The opt-in [current-session history plugin](docs/current-history-plugin.md) is implemented and has passed a real DSH Web integration smoke test; three-run V7 and V8.1 comparisons are now complete. See the [0.1.0 results and limitations](docs/current-history-plugin-results-0.1.0.md).
 
+## Transfer materials and interleaved comparison (v9)
+
+[V9](docs/transfer-v9.md) adds three frozen maintenance-handoff materials with new identifiers, constraints, receipts, multiline fields, same-line neighbors, superseded versions, and repeated hits. It scores ten exact receipts plus three handoff conditions. `transfercase.py prepare` creates six paired, interleaved 0.1.0/0.1.1 plans without calling a model; `transfercase.py run` executes that frozen schedule explicitly. Inputs, plugin files, and runner sources are checked before execution. See the [archived 0.1.1 results](docs/current-history-plugin-results-0.1.1.md) and [complete test workflow](docs/plugin-test-workflow.md).
+
 ## Run the project checks
 
 ```sh

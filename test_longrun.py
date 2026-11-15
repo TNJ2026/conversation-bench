@@ -139,6 +139,27 @@ class LongRunnerTests(unittest.TestCase):
             longrun.create(args)
         self.path=path
 
+    def test_transfer_case_runs_and_scores_all_thirteen_conditions(self):
+        import transfercase
+        path=self.root/'transfer-run'/'plan.json'
+        args=argparse.Namespace(output=str(path),model='fixture-model',provider='fixture-provider',effort='low',
+            dsh_bin=str(self.fake),load_batches=12,seed=42,timeout=5,
+            casefile=str(transfercase.CASE_DIR/'transfer-v9'/'case-1.json'))
+        with patch.object(longrun,'__file__',str(self.root/'project'/'longrun.py')):
+            longrun.create(args)
+        self.path=path
+        longrun.run(self.path)
+        state=self.state()
+        self.assertEqual(state['status'],'completed')
+        self.assertEqual(len(state['results']),22)
+        self.assertEqual(len(state['checkpoint']['anchor_sequences']),10)
+        self.assertTrue(all(state['results']['B/compact']['compaction_proof']['anchor_coverage'].values()))
+        scores,_=self.finish_grades();longrun.grade(self.path,scores)
+        self.assertEqual(self.state()['metrics']['B']['recovery']['unknown'],13)
+        self.assertFalse(self.state()['metrics']['B']['recovery']['full_delivery_success'])
+        longrun.report(self.path)
+        self.assertIn('Acceptance passed / 13',(self.path.parent/'report.html').read_text())
+
     def test_task_completion_requires_every_condition_and_valid_protocol(self):
         import taskcase
         state=self.state()

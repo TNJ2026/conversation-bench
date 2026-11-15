@@ -94,6 +94,12 @@ def validate_prefix(case, prefix):
         if spec.get('match_mode') not in (None,'labelled-receipt-line-v1'):
             raise ValueError('Unsupported receipt match mode: '+str(spec['match_mode']))
         source = turns.get(spec['source_turn'],'')
+        if 'source_quote' in spec:
+            quote = spec['source_quote']
+            if (not isinstance(quote,str) or not quote or quote not in source or
+                    spec['ticket'] not in quote or case['expected'][anchor] not in quote):
+                raise ValueError('A verbatim probe source is absent or incomplete: '+anchor)
+            continue
         pattern = rf'^工单 {re.escape(spec["ticket"])}｜[^\n]*回执码：{re.escape(case["expected"][anchor])}。'
         if not re.search(pattern,source,re.M):
             raise ValueError('A probe anchor is absent from its declared source turn: '+anchor)

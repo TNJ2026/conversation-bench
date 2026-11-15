@@ -189,6 +189,10 @@ python3 study.py long report --record studies/long-1/run.json
 
 [V8 / V8.1 协议与运行命令](docs/task-success-v8.md)通过现有隔离 A/A_repeat/B 运行器测试项目交接，检查最新决定、证据核对及可执行的下一步。10 项必需条件全部通过才算完整交付；9/10 仍为未完成。闭卷交付和允许查回后的恢复分开报告，协议不合格不计算有效成功率。V7 继续作为独立的精确回忆测试。原 V8 因回执码提示歧义仅作探索性记录；新基线使用已冻结的 V8.1，明确替换占位符，允许常见强调、括号和标签展示差异，但要求工单与实际码在同一行正确配对。旧版本用例与评分不改写。V8.1 已有本地基线记录及包含待定项的 AI 非盲复核。[当前会话历史查回插件](docs/current-history-plugin.md)已实现并通过真实 DSH Web 接入验证，V7 与 V8.1 各三组对照已完成，见[0.1.0 结果与限制](docs/current-history-plugin-results-0.1.0.md)。
 
+## 陌生材料与交错对照（v9）
+
+[V9](docs/transfer-v9.md)新增三份冻结的维保交接材料，更换编号、约束与码值，覆盖跨行、同一行邻接、旧版替代及重复命中；评分为10个精确回执与3项交接条件。`transfercase.py prepare`只准备六个0.1.0/0.1.1成对交错计划，`transfercase.py run`才执行真实模型调用。启动前校验输入、插件与运行器源码。另见[0.1.1结果归档](docs/current-history-plugin-results-0.1.1.md)与[完整测试流程](docs/plugin-test-workflow.md)。
+
 ## 项目自检
 
 ```sh

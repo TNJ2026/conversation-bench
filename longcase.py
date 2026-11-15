@@ -120,6 +120,8 @@ def build_detail_case(seed=None):
 
 def extra_batches(case, count, first):
     generation = case.get('generation', {})
+    if generation.get('kind') == 'transfer-keyed-receipts':
+        raise ValueError('Transfer materials freeze exactly 12 batches; create a new case instead of extending.')
     if generation.get('kind') == 'keyed-receipts':
         return detail_batches(generation['private_seed'],count,first)
     return batches(count,first)
