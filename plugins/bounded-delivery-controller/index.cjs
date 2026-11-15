@@ -11,7 +11,7 @@ function apply(ctx) {
   const input = JSON.parse(fs.readFileSync(path.join(home, 'bd-current-input.json'), 'utf8'));
   const allowed = [];
   const phase = input.phase;
-  if (!['bootstrap','draft','repair'].includes(phase)) throw new Error('Invalid audit phase');
+  if (!['bootstrap','draft','repair','compress'].includes(phase)) throw new Error('Invalid audit phase');
   let sessionId, requests = 0;
   const save = (name, value) => fs.writeFileSync(path.join(home, name), JSON.stringify(value, null, 2)+'\n');
   ctx.on('agent/request', async (_position, next) => ({...await next(), maxTokens: input.maxTokens}));
@@ -118,7 +118,7 @@ function apply(ctx) {
         yield {type:'text-delta',index:0,text:'{"replacement":'};
         yield {type:'finish',reason:{kind:'max-tokens'}};return;
       }
-      const response=phase==='draft'?'F-1：cafe（摘要）\n\n交接结论：不能确认按期。':
+      const response=phase==='compress'?'核验能否提前未知；建议未批准。':phase==='draft'?'F-1：cafe（摘要）\n\n交接结论：不能确认按期。':
         input.smoke_scenario==='repair-invalid'?'not-json':JSON.stringify({replacement:'交接结论：核验能否提前未知，建议未批准。',source_ids:input.evidence.packet.items.map(i=>i.id),unresolved:[]});
       yield {type:'text-delta',index:0,text:response};yield {type:'finish',reason:{kind:'completed'}};
     })());

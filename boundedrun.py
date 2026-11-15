@@ -92,11 +92,14 @@ def request_usage(home,phase,request,result):
                 totals=chunks[0] if valid else None)
 
 
-def execute(value,output,config,smoke=False,scenario='success',with_repair=False):
+def execute(value,output,config,smoke=False,scenario='success',with_repair=False,with_compression=False):
     value=input_data(value);output=Path(output).resolve()
     if output.exists():raise ValueError('Use a new output directory; no automatic resume/retry.')
     # Let DSH resolve provider authentication; one environment variable is not
     # proof of whether the runtime can authenticate.
+    limit=config.get('max_answer_chars')
+    if limit is not None and (type(limit) is not int or limit<1):raise ValueError('max_answer_chars must be a positive integer.')
+    if with_compression and (with_repair or limit is None):raise ValueError('Compression requires max_answer_chars and cannot be combined with repair.')
     environment=runtime_environment(config,smoke)
     if config.get('workflow_version')!=contract.VERSION or type(config.get('max_paragraph_chars')) is not int or not 1<=config['max_paragraph_chars']<=2000:raise ValueError('Invalid workflow/paragraph limit.')
     if any(type(config.get(k)) is not int or config[k]<1 for k in ('timeout','max_tokens')) or not 800<=config.get('evidence_chars',0)<=12000:raise ValueError('Invalid bounded request/evidence budgets.')
@@ -107,6 +110,7 @@ def execute(value,output,config,smoke=False,scenario='success',with_repair=False
     record=dict(protocol=contract.VERSION if with_repair else 'bounded-direct-evidence-v2',arm='candidate' if with_repair else 'baseline',mode='repair' if with_repair else 'direct',repair_enabled=with_repair,status='ready',pending=None,input=value,input_sha256=longrun.digest(value),config=config,
         source_hashes={name:engine.sha(ROOT/name) for name in FILES},runtime_fingerprint=engine.runtime_fingerprint(config),stages={},selection=None,
         semantic_verified=False,task_success=None,request_count=0,usage=None)
+    if with_compression:record.update(protocol='bounded-compress-evidence-v1',arm='compression',mode='compress',compression_enabled=True)
     if not with_repair:record['source_hashes']['boundedbaseline.py']=engine.sha(ROOT/'boundedbaseline.py')
     path=output/'run.json';workspace=engine.new_workspace('bounded-delivery-');start=time.monotonic();deadline=start+config['timeout']
     def phase(name,prompt,resume):
@@ -155,8 +159,41 @@ def execute(value,output,config,smoke=False,scenario='success',with_repair=False
             edit=contract.editable_paragraph(draft['answer']);record['editable_span']=edit
             repair=phase('repair',contract.repair_prompt(value['task'],packet,edit,guards,config['max_paragraph_chars']),True)
             record['selection']=contract.apply_repair(draft['answer'],repair['answer'],repair['finish_reason'],packet,edit,guards,config['max_paragraph_chars'])
+        if with_compression and record['selection']['selected_from']!='incomplete_draft' and len(''.join(draft['answer'].split()))>limit:
+            # Persist the original before the additional request, including on transport failure.
+            (output/'draft.md').write_text(draft['answer'],encoding='utf-8')
+            (output/'answer.md').write_text(draft['answer'],encoding='utf-8')
+            compressed=phase('compress',contract.compression_prompt(value['task'],value['summary'],packet,draft['answer'],limit,guards),True)
+            raw=compressed['answer'];errors=[]
+            (output/'compression.md').write_text(raw,encoding='utf-8')
+            if compressed['finish_reason']!='completed' or not raw.strip():errors.append('compression_incomplete')
+            if len(''.join(raw.split()))>limit:errors.append('compression_too_long')
+            if any(g['quote'] not in raw for g in guards):errors.append('verbatim_obligation_missing')
+            record['compression']=dict(accepted=not errors,errors=errors,non_whitespace_chars=len(''.join(raw.split())),semantic_verified=False)
+            record['selection']=dict(answer=draft['answer'] if errors else raw,accepted=False,
+                selected_from='original_draft' if errors else 'compressed_draft',errors=errors,semantic_verified=False,task_success=None)
+        # Validation does not imply semantic correctness or issue another request.
+        if limit is not None:
+            count=len(''.join(record['selection']['answer'].split()))
+            errors=[]
+            if record['selection']['selected_from']=='incomplete_draft':errors.append('incomplete_draft')
+            if count>limit:errors.append('answer_too_long')
+            record['delivery_validation']=dict(status='failed' if errors else 'passed',
+                scope='non_whitespace_length_and_completed_draft_only',
+                max_answer_chars=limit,non_whitespace_chars=count,errors=errors,
+                semantic_verified=False,task_success=None)
         record.update(status='completed',pending=None,elapsed_seconds=time.monotonic()-start)
     except Exception as error:
+        # A request can be captured (and billed) before perform() raises. Do not
+        # leave the previous phase's count or complete usage as the task total.
+        captures=sorted(home.glob('bd-*-request-*.json'))
+        previous=record.get('usage') or {}
+        record['request_count']=len(captures)
+        record['request_capture_files']=[str(p.relative_to(output)) for p in captures]
+        record['usage']=dict(complete=False,requests=len(captures),totals=None,
+            reason='execution_not_verified',
+            verified_requests=previous.get('requests',0) if previous.get('complete') else 0,
+            verified_totals=previous.get('totals') if previous.get('complete') else None)
         record.update(status='attention',problem=str(error),elapsed_seconds=time.monotonic()-start);longrun.save(path,record);raise
     longrun.save(path,record)
     (output/'draft.md').write_text(record['stages']['draft']['result']['answer'],encoding='utf-8')
@@ -191,17 +228,22 @@ def main(argv=None,with_repair=None):
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('command',choices=('smoke','run'));parser.add_argument('--output',required=True);parser.add_argument('--input',type=Path)
     parser.add_argument('--dsh-bin',default=engine.DSH_BIN);parser.add_argument('--provider',default='deepseek-official');parser.add_argument('--model',default='deepseek-flash');parser.add_argument('--effort',default='low')
     parser.add_argument('--app-version',default='0.2.2-rc.3');parser.add_argument('--max-tokens',type=int,default=4096);parser.add_argument('--timeout',type=int,default=300);parser.add_argument('--evidence-chars',type=int,default=3200);parser.add_argument('--max-paragraph-chars',type=int,default=180)
+    parser.add_argument('--max-answer-chars',type=int,help='Optional final-answer non-whitespace character cap; failure preserves output and exits 2, without retry.')
+    parser.add_argument('--compress',action='store_true',help='Explicitly allow one full-text compression request only for a completed overlong draft; requires --max-answer-chars, excludes --repair.')
     parser.add_argument('--repair',action='store_true',help='Explicitly add one local paragraph repair; default is one direct delivery request.')
     args=parser.parse_args(argv)
-    if with_repair is False and args.repair:parser.error('The baseline alias only supports direct delivery; use boundedrun.py run --repair.')
+    if args.compress and (args.repair or args.max_answer_chars is None or args.command!='run'):parser.error('--compress requires run and --max-answer-chars, and excludes --repair.')
+    if with_repair is False and (args.repair or args.compress):parser.error('The baseline alias only supports direct delivery; use boundedrun.py run --repair.')
     repair_enabled=args.repair if with_repair is None else with_repair
-    config=dict(dsh_bin=args.dsh_bin,app_version=args.app_version,provider=args.provider,model=args.model,effort=args.effort,max_tokens=args.max_tokens,timeout=args.timeout,evidence_chars=args.evidence_chars,max_paragraph_chars=args.max_paragraph_chars,workflow_version=contract.VERSION)
+    config=dict(dsh_bin=args.dsh_bin,app_version=args.app_version,provider=args.provider,model=args.model,effort=args.effort,max_tokens=args.max_tokens,timeout=args.timeout,evidence_chars=args.evidence_chars,max_paragraph_chars=args.max_paragraph_chars,max_answer_chars=args.max_answer_chars,workflow_version=contract.VERSION)
     try:
+        if args.max_answer_chars is not None and args.max_answer_chars<1:raise ValueError('--max-answer-chars must be positive.')
         if args.max_tokens<1 or args.timeout<1:raise ValueError('Positive request/time budgets required.')
         if args.command=='smoke':print(smoke(args.output,config))
         else:
             if args.input is None:raise ValueError('--input is required for a single run.')
-            r=execute(longrun.load(args.input),args.output,config,with_repair=repair_enabled);print(contract.dump(dict(status=r['status'],mode=r['mode'],selection=r['selection']['selected_from'],patch_accepted=r['selection']['accepted'],errors=r['selection']['errors'],requests=r['request_count'],usage=r['usage'],elapsed_seconds=r['elapsed_seconds'],answer_file=str(Path(args.output).resolve()/'answer.md'),semantic_verified=False,task_success=None)))
+            r=execute(longrun.load(args.input),args.output,config,with_repair=repair_enabled,with_compression=args.compress);print(contract.dump(dict(status=r['status'],mode=r['mode'],selection=r['selection']['selected_from'],patch_accepted=r['selection']['accepted'],errors=r['selection']['errors'],requests=r['request_count'],usage=r['usage'],elapsed_seconds=r['elapsed_seconds'],answer_file=str(Path(args.output).resolve()/'answer.md'),delivery_validation=r.get('delivery_validation'),semantic_verified=False,task_success=None)))
+            if (r.get('delivery_validation') or {}).get('status')=='failed':parser.exit(2)
     except (ValueError,RuntimeError,OSError) as error:parser.exit(1,str(error)+'\n')
 
 
