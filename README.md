@@ -3,6 +3,7 @@
 AI会话体验、长上下文恢复与交付质量的实验工具。Python测试工具与DSH产品源码分开；桌面对照支持DSH、ChatGPT和Hermes，自动运行器使用隔离DSH运行时。
 
 - [完整中文说明](README.zh-CN.md)
+- [插件维护指南：代码地图、测试与工作树状态](docs/plugin-maintenance.md)
 - [默认一次交付：输入、运行与复核](docs/bounded-delivery.md)
 - [配对结果及适用边界](docs/bounded-delivery-results.md)
 - [虚构输入格式示例](examples/bounded-delivery.input.json)
