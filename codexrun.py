@@ -211,11 +211,9 @@ def execute(folder):
             record['workspace']=str(workspace)
             study.save(rp,record)
             try:
-                for name,content in case.get('fixtures',{}).items():
-                    p=workspace/name
+                def inside(p):
                     if p.is_absolute() and workspace not in p.resolve().parents: raise ValueError('非法材料路径')
-                    p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8')
-                study.normalize_fixture_times(case, workspace)
+                study.write_fixtures(case, workspace, inside)
                 record['initial_files']=snapshot(workspace)[0];study.save(rp,record)
                 for number,spec in enumerate(case['turns'],1):
                     raw=folder/'raw'/job['id']/f'turn-{number}'

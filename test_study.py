@@ -368,6 +368,21 @@ class ReviewCaseTests(unittest.TestCase):
             self.assertIn('项目概况',run.record()['turns'][0]['artifacts']['report.html'])
 
 class FileCaseTests(unittest.TestCase):
+    def test_fixture_write_order_is_shuffled_only_for_timed_cases(self):
+        import suite_standard20
+        cases={c['id']:c for c in suite_standard20.build_standard20()}
+        orders=set()
+        with tempfile.TemporaryDirectory() as d:
+            for i in range(40):
+                w=Path(d)/str(i); w.mkdir(); written=[]
+                study.write_fixtures(cases['confirm-before-delete'], w, written.append)
+                orders.add(tuple(p.name for p in written))
+                self.assertEqual(len({p.stat().st_mtime_ns for p in w.iterdir()}), 1)
+            self.assertGreater(len(orders), 1)
+            plain=cases['review-training-unhinted']; written=[]
+            study.write_fixtures(plain, Path(d)/'plain', written.append)
+            self.assertEqual([p.name for p in written], list(plain['fixtures']))
+
     def test_deletion_fixture_times_are_equal_before_display(self):
         with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()) as out:
             root=Path(d); plan=root/'study'/'plan.json'

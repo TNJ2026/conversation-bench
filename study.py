@@ -92,6 +92,22 @@ def normalize_fixture_times(case, workspace):
         for name in case.get('fixtures', {}):
             os.utime(workspace/name, (timestamp, timestamp), follow_symlinks=False)
 
+def write_fixtures(case, workspace, check_path):
+    """Write materials, then equalise mtime/atime for cases that opt in.
+
+    ctime cannot be set from user space and always follows write order, so for those
+    cases the order is shuffled per workspace: it carries no fixed version cue.
+    """
+    names = list(case.get('fixtures', {}))
+    if 'fixture_mtime' in case:
+        random.SystemRandom().shuffle(names)
+    for name in names:
+        p = workspace/name
+        check_path(p)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(case['fixtures'][name], encoding='utf-8')
+    normalize_fixture_times(case, workspace)
+
 def dir_entry(path, workspace):
     """Key for an empty directory; the trailing slash keeps it distinct from a file of the same name."""
     return str(path.relative_to(workspace))+'/'
@@ -213,9 +229,7 @@ def begin(args):
         raise SystemExit('已开始，使用 next 或 submit 继续；不会覆盖。')
     workspace=workspace_for(path,job['id'])
     workspace.mkdir(parents=True, exist_ok=False)
-    for name,content in job['case']['fixtures'].items():
-        (workspace/name).write_text(content,encoding='utf-8')
-    normalize_fixture_times(job['case'], workspace)
+    write_fixtures(job['case'], workspace, lambda p: None)
     r={'version':plan['version'],'job':job['id'],'case':job['case'],'case_hash':job['case_hash'],
        'product':job['product'],'repeat':job['repeat'],'mode':plan['mode'],'created':stamp(),
        'config':{'model':args.model,'app_version':args.app_version,'permissions':args.permissions,'plugins':args.plugins,'memory':args.memory},

@@ -128,15 +128,18 @@ class RunnerTests(unittest.TestCase):
 
     def test_deletion_fixture_times_are_equal_before_first_request(self):
         self.prepare(models=['model-a'], cases='confirm-before-delete')
-        original = runner.invoke
+        original = runner.invoke; seen = []
         def invoke(cmd, prompt, workspace, raw, timeout):
-            times = {p.stat().st_mtime_ns for p in workspace.glob('draft-*.md')}
-            self.assertEqual(len(times), 1)
-            if raw.name == 'turn-1':
-                self.assertIn('文件系统时间仅是复制时间', prompt)
+            # Only record here: execute() turns exceptions into a failed record, which would hide an assert.
+            seen.append(({p.stat().st_mtime_ns for p in workspace.glob('draft-*.md')}, raw.name, prompt))
             return original(cmd, prompt, workspace, raw, timeout)
         with patch.object(runner, 'invoke', side_effect=invoke):
             runner.execute(self.output)
+        self.assertTrue(seen)
+        times, name, prompt = seen[0]
+        self.assertEqual(name, 'turn-1'); self.assertEqual(len(times), 1)
+        self.assertIn('文件系统时间仅是复制时间', prompt)
+        self.assertEqual(runner.records_for(self.output)[1][0]['status'], 'completed')
 
     def test_no_shell_interpolation_and_per_model_effort(self):
         arms=runner.arm_specs(['model;$(echo bad)@low','model-b@xhigh'],'high')

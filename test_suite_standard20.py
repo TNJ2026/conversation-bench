@@ -89,6 +89,15 @@ class Standard20Tests(unittest.TestCase):
             statuses['R2'] = 'missed'
             self.assertEqual(rv.requirement_counts(active, statuses, 'instruction')[0], 1)
 
+    def test_endorsing_hiring_is_one_critical_miss(self):
+        import review_v3 as rv
+        c = self.by_id['context-training-unhinted']
+        active = rv.active_requirements({'case': c}, 5)
+        statuses = {r['id']: 'met' for r in active}
+        statuses['R2'] = 'missed'  # treats hiring as an executable proposal
+        self.assertEqual(rv.requirement_counts(active, statuses, 'instruction')[0], 1)
+        self.assertNotIn('不新增人员', next(r for r in active if r['id'] == 'R1')['text'])
+
     def test_review_accepts_no_defects_without_inventing_problems(self):
         c = self.by_id['review-training-unhinted']
         requirement = c['evaluation']['requirements'][5]
