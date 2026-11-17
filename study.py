@@ -10,8 +10,10 @@ import random
 import sys
 import uuid
 import checks as text_checks
+import review_v3
 
 ROOT = Path(__file__).resolve().parent
+WORKSPACES = ROOT.parent/'conversation-bench-workspaces'
 DEFAULT_PRODUCTS = ('dsh', 'chatgpt')
 # Operator timing: reported on its own, never counted for or against the application.
 PROTOCOL_CHECKS = ('干预时点',)
@@ -93,8 +95,19 @@ def read_artifact(path):
             pass
     return data.decode('latin-1'), 'latin-1'
 
+def fixture_checks(case, number, files, initial, limits=()):
+    """Every provided material must be unchanged, unless an earlier or current turn authorised removing it."""
+    allowed = {name for spec in case['turns'][:number] for name in spec.get('may_remove', ())}
+    rows = []
+    for name in case.get('fixtures', {}):
+        if not limits and name not in files and name in allowed:
+            continue
+        rows.append({'check': name+'原始材料未变', 'pass': None if limits else files.get(name) == initial.get(name),
+                     'detail': '与创建工作区时的SHA256比较；本轮前获准删除的材料缺失不算改动；轮末快照不能发现改后恢复'})
+    return rows
+
 def workspace_for(plan_path, job_id):
-    base = ROOT.parent/'conversation-bench-workspaces'
+    base = WORKSPACES
     name = plan_path.parent.name
     # Plans in different places may share a directory name; never reuse another plan's workspace.
     unique = name+'-'+hashlib.sha256(str(plan_path).encode()).hexdigest()[:8]
@@ -109,7 +122,8 @@ def eligible(record):
 
 def create(args):
     products = product_list(getattr(args, 'products', DEFAULT_PRODUCTS))
-    catalog = load(ROOT/'cases-v2.json')
+    suite_version = getattr(args, 'suite', 'v3-standard20')
+    catalog = load(ROOT/f'cases-{suite_version}.json')
     chosen = [c for c in catalog if not args.cases or c['id'] in args.cases.split(',')]
     if args.cases and set(args.cases.split(',')) != {c['id'] for c in chosen}:
         raise SystemExit('存在未知案例 ID。运行 python3 study.py list 查看。')
@@ -123,7 +137,7 @@ def create(args):
             order = product_order(products, i, repeat)
             for product in order:
                 jobs.append({'id':f'J{len(jobs)+1:03}', 'case':c, 'case_hash':digest(c), 'product':product, 'repeat':repeat})
-    plan = {'version':2,'created':stamp(),'mode':args.mode,'seed':args.seed,'products':products,'jobs':jobs}
+    plan = {'version':2 if suite_version == 'v2' else 3,'suite':suite_version,'created':stamp(),'mode':args.mode,'seed':args.seed,'products':products,'jobs':jobs}
     destination = Path(args.output).resolve() if args.output else ROOT/'studies'/('study-'+uuid.uuid4().hex[:8])/'plan.json'
     if destination.exists():
         raise SystemExit('计划已存在，不覆盖。')
@@ -175,7 +189,7 @@ def begin(args):
     workspace.mkdir(parents=True, exist_ok=False)
     for name,content in job['case']['fixtures'].items():
         (workspace/name).write_text(content,encoding='utf-8')
-    r={'version':2,'job':job['id'],'case':job['case'],'case_hash':job['case_hash'],
+    r={'version':plan['version'],'job':job['id'],'case':job['case'],'case_hash':job['case_hash'],
        'product':job['product'],'repeat':job['repeat'],'mode':plan['mode'],'created':stamp(),
        'config':{'model':args.model,'app_version':args.app_version,'permissions':args.permissions,'plugins':args.plugins,'memory':args.memory},
        'protocol':{'method':args.method,'isolated':args.isolated,'unexposed':args.unexposed},
@@ -200,7 +214,10 @@ def submit(args):
     checks=text_checks.check(answer,turn.get('checks',[]),r['turns'])
     workspace=Path(r['workspace'])
     artifacts={}
-    for filename in ('report.html','report.md','timeline.csv','meeting.txt'):
+    names = dict.fromkeys(['report.html','report.md','timeline.csv','meeting.txt',
+                          *r['case'].get('fixtures', {}), *r['case'].get('absent', []),
+                          *r['case'].get('snapshot_artifacts', [])])
+    for filename in names:
         p=workspace/filename
         if p.is_file() and not p.is_symlink():
             artifacts[filename],encoding=read_artifact(p)
@@ -210,8 +227,7 @@ def submit(args):
     previous_files=r['turns'][-1]['files'] if r['turns'] else r['initial_files']
     previous_page=r['turns'][-1]['artifacts'].get('report.html','') if r['turns'] else ''
     page=artifacts.get('report.html','')
-    if 'meeting.txt' in r['initial_files']:
-        checks.append({'check':'原始材料未变','pass':current_files.get('meeting.txt')==r['initial_files']['meeting.txt'],'detail':'与创建工作区时的SHA256比较'})
+    checks.extend(fixture_checks(r['case'],index+1,current_files,r['initial_files']))
     for name in r['case'].get('absent',[]):
         appeared=(workspace/name).exists() or (workspace/name).is_symlink()
         checks.append({'check':'缺失材料文件状态','pass':None if appeared else True,
@@ -228,7 +244,7 @@ def submit(args):
         for name in ('overview','decisions'):
             before=text_checks.section(first,name); after=text_checks.section(page,name)
             checks.append({'check':name+'保持不变','pass':bool(before and after and before==after),'detail':'比较section原始HTML（含嵌套section），缺失section判失败；不证明视觉显示正常'})
-    if turn.get('revises'):
+    if turn.get('revises') and not turn.get('revision_optional'):
         before=text_checks.section(previous_page,turn['revises']); after=text_checks.section(page,turn['revises'])
         checks.append({'check':turn['revises']+'已修改','pass':bool(before and after and before!=after),'detail':'与上一轮末的section原始HTML比较；只证明内容有变化，不证明改得正确'})
     if turn.get('read_only') or (r['case']['category']=='review' and index==2):
@@ -237,31 +253,75 @@ def submit(args):
         limit=turn['interrupt_within']; delay=args.interrupt_delay
         checks.append({'check':'干预时点','pass':None if delay is None else delay<=limit,
                        'detail':'未记录延迟，需凭录屏或事件时间人工确认' if delay is None else f'{delay} 秒 / 上限 {limit} 秒；是否早于首次写入仍需人工确认'})
+    intervention_file = getattr(args, 'intervention', None)
+    intervention_text = Path(intervention_file).read_text(encoding='utf-8').strip() if intervention_file else None
+    if r['case'].get('suite_version') == 3 and args.interruption_observed and not intervention_text:
+        raise SystemExit('V3中断记录需通过 --intervention 保存实际发送的停止指令。')
+    execution_evidence = load(args.execution_evidence) if getattr(args, 'execution_evidence', None) else []
+    if not isinstance(execution_evidence, list) or any(not isinstance(x, dict) or x.get('kind') not in ('tool','observation')
+            or not isinstance(x.get('text'), str) or not x['text'].strip() for x in execution_evidence):
+        raise SystemExit('execution-evidence需为含kind=tool/observation、text的数组。')
     item={'prompt':turn['prompt'],'answer':answer,'recorded':stamp(),'checks':checks,
           'metrics':{k:getattr(args,k) for k in ('elapsed','first_feedback','active_seconds','corrections','actions','interrupt_delay')},
           'interruption_observed':args.interruption_observed,'notes':Path(args.notes).read_text(encoding='utf-8') if args.notes else '',
           'files':current_files,'artifacts':artifacts}
+    if r['case'].get('suite_version') == 3 or intervention_text or execution_evidence:
+        item.update(intervention_text=intervention_text, execution_evidence=execution_evidence,
+                    interruption_evidence=Path(args.interruption_evidence).read_text(encoding='utf-8') if getattr(args,'interruption_evidence',None) else '',
+                    no_write_before_interruption=getattr(args,'no_write_before_interruption',False))
+        item['metrics']['first_write_delay'] = getattr(args, 'first_write_delay', None)
     r['turns'].append(item); save(path,r)
     print('已保存第',index+1,'轮。检查：',json.dumps(checks,ensure_ascii=False)); display(r)
 
+def acceptance_turns(case):
+    """Active turns per acceptance item when the case defines them, else None (legacy whole-session verdicts)."""
+    reqs=(case.get('evaluation') or {}).get('requirements') or []
+    if [x['text'] for x in reqs]!=case['acceptance']:
+        return None
+    return [x['active_turns'] for x in reqs]
+
 def form(r):
-    return {'valid':None,'invalid_reason':'','acceptance':[{'criterion':x,'pass':None,'evidence':''} for x in r['case']['acceptance']],
+    turns=acceptance_turns(r['case'])
+    items=[{'criterion':x,'pass':None,'evidence':''} for x in r['case']['acceptance']]
+    if turns:
+        for item,active in zip(items,turns):
+            item['turns']={str(n):None for n in active}
+            item['pass_note']='pass由各轮判定推导：任一轮false为false；所有生效轮均已提交且为true时为true'
+    return {'valid':None,'invalid_reason':'','acceptance':items,
             'clarity':None,'clarity_evidence':'','cooperation':None,'cooperation_evidence':'',
             'rubric':RUBRIC,'summary':'说明具体事件；未知留null。'}
 
 def written(value, minimum=MIN_EVIDENCE):
     return isinstance(value,str) and len(''.join(value.split()))>=minimum
 
+def same_check(label, name):
+    # Older cases link the generic label; checks are now named per material file.
+    return label==name or (name=='原始材料未变' and label.endswith(name))
+
+def judged(item, number):
+    """The operator's verdict for this item at a turn; whole-session verdicts apply to every turn."""
+    if 'turns' in item:
+        return item['turns'].get(str(number))
+    return item.get('pass')
+
 def conflicts(case, turns, acceptance):
     """Human passes that a linked automatic check contradicts; None when the snapshot predates the links."""
     links=case.get('auto')
     if links is None:
         return None
-    return [f'“{x["criterion"]}”判通过，但第{number}轮自动检查“{c["check"]}”未通过'
-            for x in acceptance if x.get('pass') is True
+    return [f'“{x["criterion"]}”第{number}轮判通过，但自动检查“{c["check"]}”未通过'
+            for x in acceptance
             for turn,name in links.get(x['criterion'],[])
-            for number,done in enumerate(turns,1) if turn in (None,number)
-            for c in done['checks'] if c['check']==name and c['pass'] is False]
+            for number,done in enumerate(turns,1) if turn in (None,number) and judged(x,number) is True
+            for c in done['checks'] if same_check(c['check'],name) and c['pass'] is False]
+
+def derive_pass(item, submitted):
+    values=item['turns']
+    if any(v is False for v in values.values()):
+        return False
+    if all(int(n)<=submitted and v is True for n,v in values.items()):
+        return True
+    return None
 
 def interruption_problem(r):
     """Why an interruption trial cannot count as valid, or None."""
@@ -271,6 +331,16 @@ def interruption_problem(r):
         if not done['interruption_observed']:
             break
         delay,limit=done['metrics']['interrupt_delay'],spec.get('interrupt_within')
+        if r['case'].get('suite_version') == 3:
+            if done.get('intervention_text') != spec['interrupt_with']:
+                return '实际干预文本缺失或偏离预定指令，不能标为有效。'
+            if delay is None or not written(done.get('interruption_evidence')):
+                return 'V3需记录干预延迟与录屏/事件时间依据，不能仅凭观察勾选判有效。'
+            first = done['metrics'].get('first_write_delay')
+            if first is not None and delay >= first:
+                return '干预晚于首次写入或时点相同无法证明先后，不能标为有效。'
+            if first is None and not done.get('no_write_before_interruption'):
+                return '未记录首次写入时点，也未确认干预前无写入，不能标为有效。'
         if delay is not None and limit is not None and delay>limit:
             return f'干预延迟 {delay} 秒超过上限 {limit} 秒，操作协议未满足，不能标为有效；请设 valid=false 并写明原因。'
         return None
@@ -293,7 +363,21 @@ def finish(args):
     expected=r['case']['acceptance']; actual=scores.get('acceptance')
     if not isinstance(actual,list) or [x.get('criterion') if isinstance(x,dict) else None for x in actual]!=expected:
         raise SystemExit('验收条目与本次快照不一致。')
-    for x in actual:
+    active=acceptance_turns(r['case']); submitted=len(r['turns'])
+    for i,x in enumerate(actual):
+        if active:
+            given=x.get('turns')
+            if not isinstance(given,dict) or set(given)!={str(n) for n in active[i]}:
+                raise SystemExit(f'“{x["criterion"]}”需按生效轮次 {active[i]} 逐轮判定（turns）。')
+            for n,v in given.items():
+                if v is not None and type(v) is not bool:
+                    raise SystemExit('逐轮判定只能 true / false / null。')
+                if v is not None and int(n)>submitted:
+                    raise SystemExit(f'第{n}轮尚未提交，不能判定。')
+            derived=derive_pass(x,submitted)
+            if x.get('pass') is not None and x['pass']!=derived:
+                raise SystemExit(f'“{x["criterion"]}”的 pass 与逐轮判定不一致；留 null 由程序推导。')
+            x['pass']=derived
         if x.get('pass') is not None and type(x['pass']) is not bool:
             raise SystemExit('验收 pass 只能 true / false / null。')
         # A valid session that stopped early may leave an item unassessed, but not silently.
@@ -309,8 +393,8 @@ def finish(args):
     if args.outcome=='completed' and len(r['turns'])!=len(r['case']['turns']):
         raise SystemExit('轮次未完成；可使用 --outcome failed 记录失败。')
     if scores['valid']:
-        if args.outcome=='completed' and any(x.get('pass') is None for x in actual):
-            raise SystemExit('有效且跑完全部轮次的会话需评完全部验收条目，pass 不能留 null。')
+        if args.outcome=='completed' and any(x.get('pass') is None or None in x.get('turns',{}).values() for x in actual):
+            raise SystemExit('有效且跑完全部轮次的会话需评完全部验收条目及其生效轮次，不能留 null。')
         problem=interruption_problem(r) if r['case']['category']=='interrupt' else None
         if problem:
             raise SystemExit(problem)
@@ -356,7 +440,8 @@ def summary_cells(r):
         graded=clash=subjective='未评分'
     else:
         accepted=scores['acceptance']; found=conflicts(r['case'],r['turns'],accepted)
-        graded=split([x.get('pass') for x in accepted],('通过','未通过','未评'))+f'（共 {len(accepted)} 条）'
+        app_accepted = [x for x in accepted if x['criterion'] not in r['case'].get('protocol_criteria', [])]
+        graded=split([x.get('pass') for x in app_accepted],('通过','未通过','未评'))+f'（共 {len(app_accepted)} 条）'
         clash='未对账（旧案例快照）' if found is None else f'{len(found)} 处' if found else '无'
         subjective=' / '.join('未评' if scores.get(k) is None else str(scores[k]) for k in ('clarity','cooperation'))
     return [r['case']['title']+' / '+r['product'],r['status'],r['config']['model'],
@@ -411,11 +496,17 @@ def report(args):
     if reviewed:
         chunks.append('<h2>匿名文本评审</h2><p>评审者只看到随机标签；本表已与身份映射合并，不要回传给评审者。未填写的样本不列出。</p>'+
                       table(['导出目录','样本','案例','应用','事实准确性','指令遵守','实用性','依据'],reviewed))
+        chunks.append('<p>以上为历史版评分：旧匿名包可能缺少材料、产物和中断指令，未自动补证或追溯重评分。</p>')
+    reviewed_v3 = review_v3.rows(path.parent, records)
+    if reviewed_v3:
+        chunks.append('<h2>V3逐轮独立评审</h2><p>完成情况与文字质量分列。初始/中间/最终不混算；缺失轮次不补分；两评不一致时保留双方结果，不求平均。独立性为评审者声明。各维引用校验不证明语义正确。</p>' +
+                      table(['导出目录','样本','应用','完成情况','轮次/评审','事实准确性','指令遵守','实用性','复核状态','逐维依据'],reviewed_v3))
     chunks.append('<h2>各轮证据及观测指标</h2>')
     for r in records:
         scores=r.get('scores'); verdicts=''
         if scores:
-            verdicts=table(['验收条目','人工判定','依据'],[[x['criterion'],VERDICT.get(x.get('pass'),'无效值'),x.get('evidence','')] for x in scores['acceptance']])
+            verdicts=table(['验收条目','人工判定','逐轮','依据'],[[x['criterion'],VERDICT.get(x.get('pass'),'无效值'),
+                '；'.join(f'第{n}轮{VERDICT.get(v,"无效值")}' for n,v in x.get('turns',{}).items()) or '—',x.get('evidence','')] for x in scores['acceptance']])
             verdicts+=''.join('<p>冲突：'+e(line)+'</p>' for line in conflicts(r['case'],r['turns'],scores['acceptance']) or [])
         chunks.append('<details><summary>'+e(r['job']+' '+r['product']+' '+r['case']['title'])+'</summary>'+verdicts+'<pre>'+e(json.dumps(r,ensure_ascii=False,indent=2))+'</pre></details>')
     out=path.parent/'report.html'; out.write_text('\n'.join(chunks)+'\n',encoding='utf-8'); print(out)
@@ -424,19 +515,9 @@ def blind(args):
     path=Path(args.plan).resolve(); plan,records=collect(path)
     groups=pair_records(records, plan_products(plan))
     if not groups: raise SystemExit('没有可导出的有效完整对照。单应用、自测或缺少任一应用的组不进入匿名对照评审。')
-    destination=path.parent/('blind-'+uuid.uuid4().hex[:8]); destination.mkdir()
-    rng=random.SystemRandom(); mapping={}; entries=[]
-    for i,g in enumerate(groups,1):
-        ordered=list(g.values()); rng.shuffle(ordered)
-        for index,r in enumerate(ordered):
-            letter=chr(ord('A')+index)
-            label=f'P{i:03}-{letter}'; mapping[label]=r['job']
-            entries.append({'id':label,'case':r['case']['title'],'turns':[{'prompt':t['prompt'],'answer':t['answer']} for t in r['turns']]})
-    save(destination/'review.json',{'notice':'只评文本，不评桌面操作。配置、来源和产品标签已去除，但回答自身可能暴露身份，分享前检查。','samples':entries})
-    save(destination/'scores.json',{'rubric':BLIND_RUBRIC,'samples':[{'id':x['id']}|dict.fromkeys(BLIND_FIELDS)|{'evidence':''} for x in entries]})
-    save(path.parent/(destination.name+KEY_SUFFIX),mapping)
-    print('只把此目录交给评审者：',destination,'\n身份映射独立保存在计划目录，勿分享。按 scores.json 内的分级标准打1–5分并注明原文依据；'
-          '填好的 scores.json 放回该目录后，report 会并入报告。')
+    destination = review_v3.export(path.parent, groups)
+    print('V3评审目录：',destination,'\n分别把review.json与scores-r1.json、scores-r2.json交给独立评审者，不分享对方评分。'
+          '有分歧时由第三位评审填写scores-adjudicated.json。身份映射和BINDING文件留在计划目录，不分享。report验证散列、逐维引文及评分规则。')
 
 def nonnegative(raw):
     value=float(raw)
@@ -444,13 +525,10 @@ def nonnegative(raw):
     return value
 
 def main():
-    if len(sys.argv)>1 and sys.argv[1]=='long':
-        from longrun import main as long_main
-        return long_main(sys.argv[2:])
     p=argparse.ArgumentParser(description=__doc__); sub=p.add_subparsers(dest='command',required=True)
-    sub.add_parser('list')
-    sub.add_parser('long',help='自动执行长会话压缩对照；运行 long --help 查看')
+    listing = sub.add_parser('list'); listing.add_argument('--suite', choices=['v3-standard20'], default='v3-standard20')
     c=sub.add_parser('create'); c.add_argument('--cases'); c.add_argument('--products',type=product_list,default=DEFAULT_PRODUCTS,help='逗号分隔的应用：dsh,chatgpt,hermes；默认 dsh,chatgpt，可只选一个'); c.add_argument('--repeat',type=int,default=1); c.add_argument('--seed',type=int,default=42); c.add_argument('--mode',choices=['default','controlled'],default='default'); c.add_argument('--output')
+    c.add_argument('--suite', choices=['v3-standard20'], default='v3-standard20', help='v3-standard20：去提示修订20题45轮')
     for name in ('next','report','blind'):
         sub.add_parser(name).add_argument('--plan',required=True)
     b=sub.add_parser('begin'); b.add_argument('--plan',required=True); b.add_argument('--job',required=True); b.add_argument('--model',required=True)
@@ -460,10 +538,15 @@ def main():
     for field in ('elapsed','first-feedback','active-seconds','interrupt-delay'): s.add_argument('--'+field,type=nonnegative)
     for field in ('corrections','actions'): s.add_argument('--'+field,type=int)
     s.add_argument('--interruption-observed',action='store_true')
+    s.add_argument('--intervention', help='实际发送的停止指令UTF-8文件，V3干预必填')
+    s.add_argument('--interruption-evidence', help='干预与首次写入的录屏/事件时间证据文本')
+    s.add_argument('--first-write-delay', type=nonnegative)
+    s.add_argument('--no-write-before-interruption', action='store_true')
+    s.add_argument('--execution-evidence', help='供评审的结构化执行证据JSON；分享前检查身份信息')
     f=sub.add_parser('finish'); f.add_argument('--record',required=True); f.add_argument('--scores'); f.add_argument('--outcome',choices=['completed','failed'],default='completed'); f.add_argument('--confirm-conflicts',action='store_true',help='人工判通过而自动检查未通过时，确认仍按人工判定结案')
     args=p.parse_args()
     if args.command=='list':
-        for c in load(ROOT/'cases-v2.json'): print(c['id']+'\t'+c['title'])
+        for c in load(ROOT/f'cases-{args.suite}.json'): print(c['id']+'\t'+c['title'])
     else:
         for key in ('corrections','actions'):
             if getattr(args,key,None) is not None and getattr(args,key)<0: p.error(key+'不能为负数')

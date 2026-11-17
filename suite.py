@@ -85,5 +85,3 @@ def build():
             links={3:at('本轮未改变文件',2)})
     return result
 
-if __name__ == '__main__':
-    Path(__file__).with_name('cases-v2.json').write_text(json.dumps(build(),ensure_ascii=False,indent=2)+'\n', encoding='utf-8')

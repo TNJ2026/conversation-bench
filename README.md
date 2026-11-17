@@ -1,21 +1,21 @@
 # Conversation Bench
 
-AI会话体验、长上下文恢复与交付质量的实验工具。Python测试工具与DSH产品源码分开；桌面对照支持DSH、ChatGPT和Hermes，自动运行器使用隔离DSH运行时。
+AI短会话体验对照测试工具（V2/V3），Python 3.9+，无第三方依赖。桌面对照支持DSH、ChatGPT和Hermes；`dshrun.py`、`codexrun.py` 可通过 DSH SDK 或 Codex CLI 顺序执行同一套题目。长会话自动实验（V6–V15、历史查回插件、有界交付）已于2026-11-17移除。
 
 - [完整中文说明](README.zh-CN.md)
-- [插件维护指南：代码地图、测试与工作树状态](docs/plugin-maintenance.md)
-- [默认一次交付：输入、运行与复核](docs/bounded-delivery.md)
-- [配对结果及适用边界](docs/bounded-delivery-results.md)
-- [虚构输入格式示例](examples/bounded-delivery.input.json)
-- [实验协议与执行流程](docs/plugin-test-workflow.md)
 
 ```sh
-# 在项目根目录执行；input.json应是你已准备的真实材料
-python3 boundedrun.py run --input /绝对路径/input.json --output studies/my-delivery-1
-# 需要一次末段修复时显式增加 --repair，并使用新输出目录
+python3 study.py list
+python3 study.py create --output studies/new-round/plan.json
 python3 -m unittest -q
 ```
 
-当前默认有界原文证据＋一次生成。相同证据下的12次配对测试中，两组均6/6完整交付，默认追加修复没有观察到收益。结果是小样本AI非盲复核，不代表通用可靠性保证。
+`studies/`保存本地原始记录和报告，不随源码上传；不要把`completed`当作任务成功。
 
-`studies/`保存本地原始记录和报告，不随源码上传；不要覆盖冻结记录或把`completed`当作任务成功。当前本地项目位于`/Users/cxd/develop/conversation-bench`，历史迁移说明仅用于追溯。
+## 会话质量测试 V3
+
+题库为去提示修订的常规20题（45轮，`--suite v3-standard20`，也是默认值），独立核对事实准确性、指令遵守和实用性。新评审包包含原始材料、实际产物和干预证据，按轮双评并单列完成情况。见[覆盖范围、记录与评分方法](docs/conversation-evaluation-v3.md)。题目说明见[常规20题](docs/standard20.md)。
+
+## Codex CLI 批量运行
+
+新增 `codexrun.py`，支持指定多个模型与推理强度，默认使用常规20题，全部可顺序自动执行。先 `prepare` 冻结计划，再 `run` 批量调用；每题独立会话，同题逐轮恢复，保存原始事件与失败记录。见[使用说明与隔离边界](docs/codex-cli-batch.md)。CLI逻辑分离不等于严格保密隔离，也不代表桌面端测试。

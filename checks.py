@@ -65,11 +65,55 @@ def section(page, name):
     parser.close()
     return parser.result
 
+class _ResourceParser(HTMLParser):
+    """Static resource references only; comments and JavaScript strings are not tags."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.found = []
+        self.in_style = False
+
+    def css(self, text):
+        text = re.sub(r'/\*.*?\*/', '', text, flags=re.S)
+        self.found.extend(CSS_URL.findall(text))
+        self.found.extend(CSS_IMPORT.findall(text))
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'style': self.in_style = True
+        if attrs.get('style'): self.css(attrs['style'])
+        keys = {'script': ('src',), 'img': ('src',), 'iframe': ('src',),
+                'video': ('src', 'poster'), 'audio': ('src',), 'source': ('src',),
+                'embed': ('src',), 'link': ('href',), 'object': ('data',),
+                'track': ('src',), 'input': ('src',), 'image': ('href', 'xlink:href'),
+                'use': ('href', 'xlink:href')}.get(tag, ())
+        self.found.extend(attrs[k] for k in keys if attrs.get(k))
+        if tag in ('img', 'source', 'link'):
+            # HTML srcset URL tokens may contain commas (notably data: URLs).
+            # Descriptors end at the next comma; trailing commas delimit bare URLs.
+            rest = attrs.get('srcset') or attrs.get('imagesrcset') or ''
+            while rest.strip(' ,\t\r\n'):
+                rest = rest.lstrip(' ,\t\r\n')
+                match = re.match(r'\S+', rest)
+                url = match.group(); rest = rest[match.end():]
+                self.found.append(url.rstrip(','))
+                if not url.endswith(','):
+                    comma = rest.find(',')
+                    rest = rest[comma + 1:] if comma >= 0 else ''
+
+    handle_startendtag = handle_starttag
+
+    def handle_endtag(self, tag):
+        if tag == 'style': self.in_style = False
+
+    def handle_data(self, text):
+        if self.in_style: self.css(text)
+
+
 def linked_resources(page):
-    """Resources a single offline file would have to load from elsewhere."""
-    found = [next(v for v in m.groups() if v is not None) for m in RESOURCE.finditer(page)]
-    found += CSS_URL.findall(page) + CSS_IMPORT.findall(page)
-    return [v.strip() for v in found if v.strip() and not v.strip().lower().startswith(('data:', '#'))]
+    """Static references, not proof of offline behavior (dynamic JS needs browser review)."""
+    parser = _ResourceParser()
+    parser.feed(page); parser.close()
+    return [v.strip() for v in parser.found if v.strip() and not v.strip().lower().startswith(('data:', '#'))]
 
 def check_dates(text, values):
     dates = list(FULL_DATE.finditer(text))
@@ -79,7 +123,7 @@ def check_dates(text, values):
     without_year = {(int(m), int(d)) for m, d in MONTH_DAY.findall(yearless_text)}
     missing = [v for v in values if v not in present]
     if not missing:
-        return True, '全部出现（年-月-日、年/月/日及中文年月日写法视为等价）'
+        return True, '指定日期均出现；只核对存在性，不验证事件归属或排除额外错误日期（支持等价日期写法）'
     ambiguous = [v for v in missing if tuple(int(x) for x in v.split('-')[1:]) in without_year]
     if len(ambiguous) == len(missing):
         return None, '只出现缺少年份的写法，需人工确认：' + ', '.join(missing)
@@ -95,7 +139,7 @@ def check(text, rules, earlier):
             results.append({'check': rule.get('label', '包含指定文本'), 'pass': not missing, 'detail': '缺少：' + ', '.join(missing) if missing else '全部出现'})
         elif kind == 'dates':
             passed, detail = check_dates(text, rule['values'])
-            results.append({'check': '保留指定日期', 'pass': passed, 'detail': detail})
+            results.append({'check': rule.get('label', '保留指定日期'), 'pass': passed, 'detail': detail})
         elif kind == 'length':
             length = len(''.join(text.split()))
             low, high = rule.get('min'), rule.get('max')

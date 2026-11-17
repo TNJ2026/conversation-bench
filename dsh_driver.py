@@ -1,11 +1,47 @@
 """DSH SDK-profile JSON-RPC transport. No third-party Python dependencies."""
 import json
 import os
+from pathlib import Path
+import re
 import queue
 import signal
 import subprocess
 import threading
 import time
+
+
+DSH_BIN = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'
+
+
+def runtime_environment(config,smoke=False):
+    """Bridge only the official API key; never persist credentials in records.
+
+    Accept the simple scalar format written by DSH, not arbitrary YAML.
+    Complex/ambiguous documents fail closed rather than guessing a secret.
+    """
+    if smoke or config.get('provider')!='deepseek-official' or os.environ.get('DEEPSEEK_API_KEY'):
+        return {}
+    home=Path(os.environ.get('DSH_HOME') or Path.home()/'.dsh')
+    source=home/'.credentials.yaml'
+    if not source.exists():return {}
+    if source.stat().st_mode & 0o077:raise ValueError('DSH credentials must be owner-only (chmod 600).')
+    lines=source.read_text().splitlines();inside=False;values=[];sections=0
+    for line in lines:
+        if line and not line[0].isspace() and not line.startswith('#'):
+            inside=line.strip()=='refs:'
+            if inside:sections+=1
+        elif inside:
+            match=re.fullmatch(r'  DEEPSEEK_API_KEY: *(.*)',line)
+            if match:values.append(match[1])
+    if not values:return {}
+    if sections!=1 or len(values)!=1:raise ValueError('Ambiguous DSH API key entry.')
+    raw=values[0]
+    try:
+        value=json.loads(raw) if raw.startswith('"') else raw[1:-1].replace("''", "'") if raw.startswith("'") and raw.endswith("'") else raw
+        if not isinstance(value,str) or not re.fullmatch(r'[A-Za-z0-9_.-]+',value):raise ValueError()
+    except ValueError:
+        raise ValueError('Unsupported DSH API key scalar; use the launch environment instead.') from None
+    return {'DEEPSEEK_API_KEY':value}
 
 
 class DriverError(RuntimeError):
@@ -29,6 +65,8 @@ class DshDriver:
         transcript.parent.mkdir(parents=True, exist_ok=True)
         env = dict(os.environ, DSH_HOME=str(home))
         command = [config['dsh_bin'], '--profile', 'sdk']
+        if config.get('profile_patch'):
+            command.extend(['--patch', str(config['profile_patch'])])
         deadline = time.monotonic() + config['timeout']
         with transcript.open('w', encoding='utf-8') as raw, transcript.with_suffix('.stderr.log').open('w') as err:
             proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err,

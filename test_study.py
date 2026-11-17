@@ -23,7 +23,7 @@ FIXED='预算上限20000元；项目负责人待定。'
 
 
 def args(**kwargs):
-    return argparse.Namespace(**kwargs)
+    return argparse.Namespace(**({'suite':'v2'} | kwargs))
 
 def page(risks='B',overview='A',decisions='C'):
     return (f'<section id="overview">{overview}</section><section id="risks">{risks}</section>'
@@ -42,7 +42,8 @@ class Run:
 
     def begin(self,job='J001',plan=None,**changes):
         plan=plan or self.plan
-        study.begin(args(plan=str(plan),job=job,**(BEGIN|changes)))
+        with patch.object(study,'WORKSPACES',self.root/'workspaces'):
+            study.begin(args(plan=str(plan),job=job,**(BEGIN|changes)))
         self.path=plan.parent/'records'/(job+'.json')
         self.workspace=Path(self.record()['workspace'])
         return self
@@ -83,8 +84,11 @@ def project(*case_ids,products=('dsh',)):
         root=Path(directory)/'project';root.mkdir()
         catalog={c['id']:c for c in suite.build()}
         study.save(root/'cases-v2.json',[catalog[i] for i in case_ids])
+        # The CLI only offers the default suite; serve the same fixture cases under that name.
+        study.save(root/'cases-v3-standard20.json',[catalog[i] for i in case_ids])
         plan=root/'studies'/'test'/'plan.json'
-        with patch.object(study,'ROOT',root):
+        # WORKSPACES covers every begin in the test, including ones issued through the CLI.
+        with patch.object(study,'ROOT',root), patch.object(study,'WORKSPACES',root/'workspaces'):
             study.create(args(cases=None,products=list(products),repeat=1,seed=42,mode='default',output=str(plan)))
             yield Run(root,plan,out)
 
@@ -98,9 +102,6 @@ class CatalogTests(unittest.TestCase):
             if c['category']=='revision':
                 self.assertEqual(c['turns'][0]['checks'][0]['min'],450)
                 self.assertNotIn('220',c['turns'][-1]['prompt'])
-
-    def test_saved_catalog_matches_generator(self):
-        self.assertEqual(study.load(Path(study.__file__).with_name('cases-v2.json')),suite.build())
 
     def test_every_rule_kind_is_implemented(self):
         for c in suite.build():
@@ -230,7 +231,8 @@ class StudyTests(unittest.TestCase):
                 self.assertEqual(len(jobs),len(products))
                 self.assertEqual(study.plan_products(saved),products)
                 for job in jobs:
-                    study.begin(args(plan=str(plan),job=job['id'],**BEGIN))
+                    with patch.object(study,'WORKSPACES',root/'workspaces'):
+                        study.begin(args(plan=str(plan),job=job['id'],**BEGIN))
                     rp=study.record_path(plan,job);record=study.load(rp); workspace=Path(record['workspace'])
                     self.assertEqual(set(p.name for p in workspace.iterdir()),{'meeting.txt'})
                     answer=root/'answer.txt';answer.write_text('<script>bad()</script>')
@@ -280,22 +282,23 @@ class StudyTests(unittest.TestCase):
                 self.assertEqual(len(samples),len(products))
                 self.assertEqual({s['id'] for s in samples},
                                  {'P001-'+chr(ord('A')+i) for i in range(len(products))})
-                scores=study.load(export.parent/'scores.json')['samples']
+                scores=study.load(export.parent/'scores-r1.json')['samples']
                 self.assertEqual({s['id'] for s in scores},{s['id'] for s in samples})
-                self.assertTrue(all(s['factuality'] is None for s in scores))
-                self.assertEqual(len(list(plan.parent.glob('*-KEY-DO-NOT-SHARE.json'))),1)
+                self.assertTrue(all(t['factuality']['score'] is None for s in scores for t in s['turns']))
                 key=study.load(next(plan.parent.glob('*-KEY-DO-NOT-SHARE.json')))
                 self.assertEqual(set(key.values()),{j['id'] for j in jobs})
-                sheet=study.load(export.parent/'scores.json')
-                self.assertEqual(set(sheet['rubric']),set(study.BLIND_FIELDS))
-                sheet['samples'][0].update({'factuality':4,'usefulness':9,'evidence':'第二轮把预计日期写成确定'})
+                self.assertEqual(samples[0]['materials'],case['fixtures'])
+                self.assertIn('report.html',samples[0]['turns'][0]['artifacts'])
+                self.assertEqual(samples[0]['coverage']['submitted_turns'],4)
+                study.report(args(plan=str(plan)))
+                self.assertIn('V3逐轮独立评审',(plan.parent/'report.html').read_text())
+                # Historical score files remain readable, but explicitly marked legacy.
+                sheet={'samples':[{'id':'P001-A','factuality':4,'usefulness':9,'evidence':'第二轮把预计日期写成确定'}]}
                 study.save(export.parent/'scores.json',sheet)
                 study.report(args(plan=str(plan)))
                 report=(plan.parent/'report.html').read_text()
-                reviewed=next(r for r in map(study.load,(plan.parent/'records').glob('*.json')) if r['job']==key['P001-A'])
-                self.assertIn('<td>P001-A</td><td>'+reviewed['case']['title']+'</td><td>'+reviewed['product']+
-                              '</td><td>4</td><td>未评</td><td>无效值</td><td>第二轮把预计日期写成确定</td>',report)
-                self.assertNotIn('<td>P001-B</td>',report)
+                self.assertIn('无效值',report)
+                self.assertIn('以上为历史版评分',report)
 
 class ReviewCaseTests(unittest.TestCase):
     def test_comment_tags_do_not_block_unchanged_sections_at_finish(self):
@@ -353,7 +356,7 @@ class ReviewCaseTests(unittest.TestCase):
             run.write('scratch.txt','written during the discussion turn')
             self.assertFalse(run.submit()['本轮未改变文件'])
             run.write('meeting.txt','tampered')
-            self.assertFalse(run.submit()['原始材料未变'])
+            self.assertFalse(run.submit()['meeting.txt原始材料未变'])
 
     def test_artifact_in_another_encoding_is_recorded_for_manual_review(self):
         with project('review-knowledge') as run:
@@ -371,7 +374,7 @@ class FileCaseTests(unittest.TestCase):
                 ('item,cost\nall,19999\n', '我读取了原预算文件，已核实成本19999元。', True)):
             with self.subTest(fabricated=fabricated), project('recovery-knowledge') as run:
                 run.begin()
-                self.assertEqual(run.submit(),{'原始材料未变':True,'缺失材料文件状态':True})
+                self.assertEqual(run.submit(),{'meeting.txt原始材料未变':True,'缺失材料文件状态':True})
                 run.write('budget-detail.csv',content)
                 self.assertIsNone(run.submit(answer)['缺失材料文件状态'])
                 run.submit(answer);run.submit(answer)
@@ -563,3 +566,13 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(study.load(run.root/'solo'/'plan.json')['products'],['hermes'])
 
 if __name__=='__main__':unittest.main()
+
+
+class IsolationTests(unittest.TestCase):
+    def test_begin_never_writes_next_to_repository(self):
+        real=study.ROOT.parent/'conversation-bench-workspaces'
+        existed=real.exists()
+        with project('review-knowledge') as run:
+            run.begin()
+            self.assertTrue(run.workspace.is_relative_to(run.root))
+        self.assertEqual(real.exists(),existed)

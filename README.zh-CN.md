@@ -1,17 +1,17 @@
-# 桌面会话体验对照测试 v2
+# 桌面会话体验对照测试 v3
 
-> 当前本地目录：`/Users/cxd/develop/conversation-bench`。推荐从[有界证据直接交付](docs/bounded-delivery.md)开始，默认一次生成，修复需显式`--repair`。见[已完成配对结果](docs/bounded-delivery-results.md)；旧迁移说明保留用于历史追溯。
+> 当前本地目录：`/Users/cxd/develop/conversation-bench`。本仓库只保留短会话测评（V2/V3）；长会话自动实验（V6–V15、历史查回插件、有界交付）已于2026-11-17移除。
 
 [中文](README.zh-CN.md) | [English](README.md)
 
-Python 3.9+，无第三方依赖。新版入口为 `study.py`。支持 DeepSeek Harness（`dsh`）、ChatGPT（`chatgpt`）和 Hermes（`hermes`）。包含六类场景，每类三个不同案例；默认两款应用共36次会话，也可单独测试一款（18次）或三款同题对照（54次）。提供逐轮提示、独立材料目录、产物快照、协议分组、对照报告和匿名文本评审导出。短会话套件由操作员操作桌面应用，不模拟用户自答，也不自动点击应用或直接调用模型API；另提供通过 DSH SDK profile 连续执行的长会话自动运行器。
+Python 3.9+，无第三方依赖。新版入口为 `study.py`。支持 DeepSeek Harness（`dsh`）、ChatGPT（`chatgpt`）和 Hermes（`hermes`）。题库为去提示修订的常规20题（45轮，`v3-standard20`，默认值），见[常规20题](docs/standard20.md)；默认两款应用共40次会话，单款20次，三款60次。逐轮评分规则见[会话测试 V3](docs/conversation-evaluation-v3.md)。提供逐轮提示、独立材料目录、产物快照、协议分组、对照报告和匿名文本评审导出。短会话套件由操作员操作桌面应用，不模拟用户自答，也不自动点击应用或直接调用模型API。另有 `dshrun.py`、`codexrun.py` 通过 DSH SDK 或 Codex CLI 顺序执行同一套短会话题目。
 
 ## 加入 Hermes
 
 新建计划时用 `--products` 选择应用，逗号分隔；不填写时仍使用原来的 `dsh,chatgpt`，旧计划和历史记录无需修改。
 
 ```sh
-# 只测试 Hermes：18次会话
+# 只测试 Hermes：12次会话
 python3 study.py create --products hermes --output studies/hermes-desktop-1/plan.json
 python3 study.py next --plan studies/hermes-desktop-1/plan.json
 # DSH 与 Hermes 对照：36次会话
@@ -25,8 +25,6 @@ python3 study.py create --products dsh,chatgpt,hermes --output studies/three-app
 产品标签记录的是被测应用，不是模型名称。如果实际使用 Codex 或其他客户端，应在配置中明确记录，不把应用标签当作模型或客户端已经对齐的证明。
 
 ## 从这里开始
-
-历史测试记录、过程材料和对比报告保存在项目之外的本地归档目录，不随源码上传。归档中的路径映射与校验清单用于追溯原始证据。
 
 以下以新计划 `studies/new-round/plan.json` 为例。在终端执行：
 
@@ -69,20 +67,6 @@ python3 study.py submit \
 
 暂时退出后，运行 `next --plan ...` 显示尚未提交的当前轮。每次提交原子保存；已提交内容不重跑、不覆盖。
 
-## 中途干预案例
-
-这类案例第一步会同时给操作员“开始任务”和“干预”两条指令。它们必须在桌面应用里实时发送：任务仍运行时，在首次写入前或5秒内（先发生者）发送停止指令。若先前任务已完成，本次干预实验无效，不要假装发生过打断。
-
-把两条消息对应的响应按顺序一起写入首轮回答文件。备注记录发送干预、应用确认干预、后续调用和写入时点；区分已经在执行的写入完成与收到干预后新发起写入。
-
-```sh
-python3 study.py submit --record studies/new-round/records/J001.json \
-  --answer /tmp/bench-answer.txt --notes /tmp/bench-notes.txt \
-  --interruption-observed --interrupt-delay 1.5
-```
-
-`--interruption-observed` 只在实际观察到运行中干预时提供，且只能用于带预定干预的那一轮；延迟只在能够测量时填写。没有该观察，或记录的延迟超过5秒上限，脚本拒绝将干预案例标为有效：这是操作协议未满足，应设 `valid=false` 并写明原因。干预时点属于协议检查，在报告中单列，不计入应用的自动检查。
-
 ## 完成会话与评分
 
 所有轮次结束后生成评分模板：
@@ -94,10 +78,10 @@ python3 study.py finish --record studies/new-round/records/J001.json
 编辑生成的 `J001-scores.json`：
 
 - `valid`：真实逐轮、材料正确、没有未来题目泄露则设 `true`；协议失效设 `false` 并填 `invalid_reason`。任务做得差或失败不等于测试无效。
-- `acceptance[].pass`：`true` / `false` / `null`（未评）。有效且跑完全部轮次的会话必须评完每一条；只有提前失败（`--outcome failed`）的会话可以留 `null`。有效会话的每一条都要在 `evidence` 写至少6个非空白字符：已评的写轮次、原文、文件或具体行为，未评的写无法评判的原因。
+- `acceptance[].turns`：每条验收按其生效轮次逐轮填 `true` / `false` / `null`（未评），例如首轮违反、第4轮改正可分别如实记录。`pass` 留 `null`，由程序推导：任一轮 `false` 为 `false`，所有生效轮都已提交且为 `true` 时为 `true`；手填与逐轮不符会被拒绝。有效且跑完全部轮次的会话必须评完每一轮；只有提前失败（`--outcome failed`）的会话可以留 `null`。有效会话的每一条都要在 `evidence` 写至少6个非空白字符：已评的写轮次、原文、文件或具体行为，未评的写无法评判的原因。
 - `clarity`（表达清晰度）只看应用怎么说：凭它的回复能否弄清做了什么、依据是什么、还有什么没做或不确定。`cooperation`（协作配合度）只看应用怎么做：是否按指令的范围和节奏行事，需要多少案例预定之外的纠正。两项各有逐级标准，写在评分模板的 `rubric` 里。取值 1–5 或 `null`；打了分就要在 `clarity_evidence` / `cooperation_evidence` 写具体事件。这两项由知道应用身份的操作员给出，不是盲评，报告中也这样标注。
 
-人工验收判通过、而关联的自动检查未通过时（例如“第一、三节逐字保持”判通过，但自动检查发现概况一节有改动），`finish` 会列出冲突并拒绝结案。请改判；若确认自动检查在此不适用，在 `evidence` 说明后加 `--confirm-conflicts` 结案，冲突仍会显示在报告里。只有部分验收条目有对应的自动检查，其余条目完全依靠人工判断。
+人工验收在某轮判通过、而该轮关联的自动检查未通过时（例如“第一、三节逐字保持”第2轮判通过，但自动检查发现概况一节有改动），`finish` 会列出冲突并拒绝结案。请改判；若确认自动检查在此不适用，在 `evidence` 说明后加 `--confirm-conflicts` 结案，冲突仍会显示在报告里。只有部分验收条目有对应的自动检查，其余条目完全依靠人工判断。
 
 ```sh
 python3 study.py finish --record studies/new-round/records/J001.json \
@@ -135,21 +119,21 @@ python3 study.py blind --plan studies/new-round/plan.json
 - 验收与自动检查冲突：人工判通过而关联自动检查未通过的处数；旧版案例快照没有关联信息，显示“未对账”。
 - 清晰／合作：操作员非盲评分。
 
-匿名导出目录仅包含提示、回答、随机标签及评分模板：两方使用A/B，三方使用A/B/C，去除产品标签和配置。身份映射另存在计划目录的 `KEY-DO-NOT-SHARE` 文件，绝不交给评审者。回答本身可能提及产品或路径，分享前检查，不保证完全匿名。
+匿名导出现在保存原始材料、计划与已提交轮次、实际产物、中断指令与执行证据，以及随机标签、评分标准和逐轮模板。失败或提前终止样本明确显示未提交轮次，不与完整交付混算。身份映射与散列绑定在导出目录外，不能交给评审者。文本可能透露身份，分享前检查，不保证完全匿名。
 
-盲评三项各1–5分：事实准确性、指令遵守、实用性，每一级的判据写在导出的 `scores.json` 的 `rubric` 里。评审者填好后，把 `scores.json` 放回原导出目录，再运行 `report`：报告会新增“匿名文本评审”一节，按身份映射还原应用并列出各项分数和依据；超出1–5的值显示为无效值，没写依据的显示为缺依据，不计算平均分。合并后的报告含应用身份，不要回传给评审者。桌面操作体验单独评分，不从文字推断。
+事实准确性、指令遵守和实用性按已提交轮次分别评1–5分或留 `null` 并说明原因。两位评审分别独立填写 `scores-r1.json` / `scores-r2.json`，每维保留精确引文；有分歧时第三位填写 `scores-adjudicated.json`。再次运行 `report` 会校验引文、分数口径、输入绑定并显示双评分、完成情况与裁决状态，不平均，不用最终纠正覆盖初始错误。旧 `scores.json` 保持可读并标明历史证据局限。详见[填写方法和评分锚点](docs/conversation-evaluation-v3.md)。合并报告含应用身份，不能回传评审者。
 
 ## 追加测试计划
 
 ```sh
 python3 study.py list
-# 全部18案例，每款应用各一次：36次会话
+# 默认20个案例，每款应用各一次：40次会话
 python3 study.py create --output studies/another-round/plan.json --seed 73
 # 只复测出现差异的案例，每款应用追加两次
-python3 study.py create --cases revision-knowledge,context-training \
+python3 study.py create --cases revision-knowledge-unhinted,context-training-unhinted \
   --repeat 2 --output studies/focused-retest/plan.json
 # 仅复测 Hermes 的这两个案例，各两次：4次会话
-python3 study.py create --products hermes --cases revision-knowledge,context-training \
+python3 study.py create --products hermes --cases revision-knowledge-unhinted,context-training-unhinted \
   --repeat 2 --output studies/hermes-retest/plan.json
 ```
 
@@ -161,41 +145,7 @@ python3 study.py create --products hermes --cases revision-knowledge,context-tra
 
 文件返工自动保存每轮HTML、Markdown、CSV和原材料内容，校验原材料哈希、首稿是否包含全部三个指定section且未引用外部脚本、样式或媒体、未要求改动的两节是否逐字保持，以及每个返工轮风险分析一节是否确有变化；讨论轮和只读轮与上一轮比较文件哈希。缺失材料案例将新出现的同名路径标为待人工核验；新建模板或模拟数据本身不能证明伪造读取，需结合回答与工具证据判断。干预案例将记录的延迟与5秒上限比较，作为协议检查单列；超过上限的会话不能标为有效，未测量延迟时留待人工确认。非UTF-8的产物仍会保存并标为需人工确认。section有变化不等于改得正确。哈希无法发现改后恢复，也不能证明浏览器实际预览成功。实际预览、工具过程和运行中停止仍需人工证据。文件及截图可能包含个人信息，分享前审阅。
 
-案例位于 `cases-v2.json`；`suite.py` 可重新生成内置v2案例，但会覆盖对该文件的手工修改。文本约束检查由 `checks.py` 提供。
-
-## 长会话压缩前后对照
-
-[长会话压缩前后对照案例](docs/long-context-compaction-qinglu.md)采用共同检查点分支、真实压缩证据、闭卷回忆与只读查回两阶段。完整提示和记录模板见 `cases/long-context-compaction-qinglu.json`。已通过 `python3 study.py long` 接入自动运行器，不计入上述18个短会话案例。自动执行使用 DSH 的 `sdk` profile，不是桌面 UI；需要可用的 DSH CLI 和启动环境中的模型凭据，不会从日常桌面 profile 复制凭据或插件。停止测试进程后复制独立测试环境建立三支，调用原生 `/compact` 并验证三轮早期信息确实进入替代范围。
-
-```sh
-python3 study.py long create --model deepseek-v4-flash --effort low \
-  --load-batches 12 --output studies/long-1/run.json
-python3 study.py long run --record studies/long-1/run.json
-python3 study.py long grade --record studies/long-1/run.json
-# 填写 scores.json 中的协议复核与逐项评分后验证：
-python3 study.py long grade --record studies/long-1/run.json \
-  --scores studies/long-1/scores.json
-python3 study.py long report --record studies/long-1/run.json
-```
-
-`run --max-actions N` 在动作边界暂停，同一命令可继续；建检查点之前可用 `extend --record ... --batches N` 追加新编号负载。超时或断连后禁止自动重发，避免重复调用或污染历史。详细步骤见[自动运行说明](docs/long-context-runner.md)。执行命令会调用真实目标模型，协议模拟测试不代表实测成绩。
-
-漏答单列为指令遗漏，记未知而非错误；明确给出错误答案才计入错误项数。该案例每个锚点按“正确／部分正确／未知／错误”四档人工评分，判为正确所需的要点逐条列在JSON的 `required_points`。保留分（正确记1、部分正确记0.5）与错误项数并列报告，不合成一个分数。另设一支不压缩的重复对照，用来估计与压缩无关的波动；压缩分支与对照的差值不超过这个波动时，不解释为压缩的影响。语义评分仍由人工完成，程序校验逐项完整性、固定文本通过项、漏答档位、查回来源要求及评分对应的回答快照。人工选定最终结论原文后，程序核对原文片段并检查字数、日期、预算与固定句；无法选定时留待人工确认。信息未泄露、外部写入和记忆变化仍需明确的人工协议复核，不能靠工作区哈希自动证明。
-
-`longcase.py` 重新生成该JSON中的合成负载，不改动手写的轮次、探针和评分口径。12批仍不足以触发压缩时，`python3 longcase.py --extra N` 输出N批新编号的追加负载，不改写案例文件。
-
-
-细节回忆实验请使用 `--case cases/long-context-compaction-qinglu-v7.json --load-batches 12`。v7 查询工单独有的回执码，校验原始材料覆盖和三档评分；旧 v6 因可由尾部规律推断答案而退役，仅保留历史材料，禁止新建或继续执行。详见[修订协议](docs/long-context-runner.md)。
-
-## 压缩后的任务完成测试（v8）
-
-[V8 / V8.1 协议与运行命令](docs/task-success-v8.md)通过现有隔离 A/A_repeat/B 运行器测试项目交接，检查最新决定、证据核对及可执行的下一步。10 项必需条件全部通过才算完整交付；9/10 仍为未完成。闭卷交付和允许查回后的恢复分开报告，协议不合格不计算有效成功率。V7 继续作为独立的精确回忆测试。原 V8 因回执码提示歧义仅作探索性记录；新基线使用已冻结的 V8.1，明确替换占位符，允许常见强调、括号和标签展示差异，但要求工单与实际码在同一行正确配对。旧版本用例与评分不改写。V8.1 已有本地基线记录及包含待定项的 AI 非盲复核。[当前会话历史查回插件](docs/current-history-plugin.md)已实现并通过真实 DSH Web 接入验证，V7 与 V8.1 各三组对照已完成，见[0.1.0 结果与限制](docs/current-history-plugin-results-0.1.0.md)。
-
-## 陌生材料与交错对照（v9）
-
-[V9](docs/transfer-v9.md)新增三份冻结的维保交接材料，更换编号、约束与码值，覆盖跨行、同一行邻接、旧版替代及重复命中；评分为10个精确回执与3项交接条件。`transfercase.py prepare`只准备六个0.1.0/0.1.1成对交错计划，`transfercase.py run`才执行真实模型调用。启动前校验输入、插件与运行器源码。另见[0.1.1结果归档](docs/current-history-plugin-results-0.1.1.md)与[完整测试流程](docs/plugin-test-workflow.md)。
-
-已完成[有界证据交付与可选修复](docs/bounded-delivery.md)：程序生成限长原文证据包，默认一次直接生成，只有`--repair`才追加末段修复。相同证据的12次配对中两组均6/6完整交付，追加修复耗时1.91倍、token为2.24倍，未观察到完整交付收益；结果为AI非盲复核，详见[结果摘要](docs/bounded-delivery-results.md)。旧失败和冻结实验保持不变。
+案例位于 `cases-v3-standard20.json`，由 `python3 suite_v3.py` 从 `suite_standard20.py` 生成（它沿用 `suite.py`、`suite_v3.py` 中的旧题定义），生成脚本会覆盖对应 JSON 的手工修改。文本约束检查由 `checks.py` 提供。
 
 ## 项目自检
 
@@ -203,4 +153,8 @@ python3 study.py long report --record studies/long-1/run.json
 python3 -m unittest -v
 ```
 
-自检只使用临时数据，不制造产品测评结果。覆盖全部文本检查、案例数量及已保存案例与生成器的一致性、应用选择与轮换、协议对照排除、失败保留、section与文件变化检查、缺失材料与干预处理、逐轮保存、中断后继续、评分校验（未评条目、依据长度、空值）、人工验收与自动检查的冲突、超时干预不得标为有效、报告汇总列、命令行默认值、HTML转义、双/三方匿名导出与评审分数并入报告、旧计划兼容，以及长会话负载的编号、多样性、不含锚点用词和评分要点的完整性。
+自检只使用临时数据，不制造产品测评结果。覆盖全部文本检查、案例数量及已保存案例与生成器的一致性、应用选择与轮换、协议对照排除、失败保留、section与文件变化检查、缺失材料与干预处理、逐轮保存、中断后继续、评分校验（未评条目、依据长度、空值）、人工验收与自动检查的冲突、超时干预不得标为有效、报告汇总列、命令行默认值、HTML转义、双/三方匿名导出与评审分数并入报告以及旧计划兼容。
+
+## Codex CLI 批量运行
+
+新增 `codexrun.py`，支持指定多个模型与推理强度，默认使用常规20题，全部可顺序自动执行。先 `prepare` 冻结计划，再 `run` 批量调用；每题独立会话，同题逐轮恢复，保存原始事件与失败记录。见[使用说明与隔离边界](docs/codex-cli-batch.md)。CLI逻辑分离不等于严格保密隔离，也不代表桌面端测试。
