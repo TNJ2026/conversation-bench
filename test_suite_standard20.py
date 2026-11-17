@@ -165,6 +165,14 @@ class RequirementScoringTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '逐条覆盖'):
             self.check(sheet)
 
+    def test_undeterminable_requirement_forces_null_score(self):
+        with self.assertRaisesRegex(ValueError, 'na'):
+            self.check(self.sheet(['na', 'na', 'na', 'na'], fact=5, instruction=5, usefulness=5))
+        with self.assertRaisesRegex(ValueError, 'na'):
+            self.check(self.sheet(['met', 'na', 'met', 'met'], instruction=5))
+        # An na in one dimension does not block scoring another dimension.
+        self.check(self.sheet(['met', 'na', 'met', 'met'], fact=5))
+
     def test_requirement_quotes_and_minimum_length(self):
         self.rv.verify_quote({'kind': 'requirement', 'id': 'R2', 'quote': '不先反问'}, self.sample, 1)
         with self.assertRaisesRegex(ValueError, '本轮生效'):

@@ -11,7 +11,7 @@ STATUSES = ('met', 'partial', 'missed', 'na')
 MIN_QUOTE = 4
 RUBRIC = {
     'factuality': '只评可核实的事实陈述。先判是否适用/证据充分；否则score=null并说明。编造来源、读取或验证证据，或>=2个关键事实错误=1；恰1个关键事实错误且无编造证据=2；无关键错但>=2个次要事实错误/无依据事实=3；恰1个次要问题=4；无已发现问题=5。dimension=factuality的本轮要求未满足或部分满足时，必须按其重要性计入counts；清单外另发现的事实错误可再加。虚构创作、明确假设与允许的推断不计事实错误。不得把“资料没提供”自动判成错误。',
-    'instruction_following': '分数由本轮dimension=instruction的要求状态自动推导，不另填计数：关键missed>=2=1；关键missed=1为2；关键partial或次要missed/partial>=2为3；恰1项次要未满足为4；全部满足为5。只填requirements中各要求状态，na表示本轮无法判定且需说明。事实类要求只计事实维度，同一问题不跨维度重复扣分。',
+    'instruction_following': '分数由本轮dimension=instruction的要求状态自动推导，不另填计数：关键missed>=2=1；关键missed=1为2；关键partial或次要missed/partial>=2为3；恰1项次要未满足为4；全部满足为5。只填requirements中各要求状态，na表示本轮无法判定且需说明；某维度有na要求时，该维度score须为null。事实类要求只计事实维度，同一问题不跨维度重复扣分。',
     'usefulness': '结合该用例的5/3/1锚点评估当轮产物。5=可直接用于指定目的；4=仅局部措辞/排版小改，不需新增事实或重排核心结构；3=需补充关键步骤或重组后才能用；2=只可保留零散内容，核心产物需重做；1=不可用或会误导行动。dimension=usefulness的要求（如未经要求的主动识别）只在此维度参考，不计入事实或指令。无法看到所需产物时score=null，不根据“已完成”措辞猜测可用性。',
 }
 PROTOCOL = {
@@ -223,9 +223,13 @@ def validate_sheet(sheet, packet, packet_hash, adjudicated=False):
                 derived['factuality'] = requirement_counts(active, statuses, 'factuality')
             for field in FIELDS:
                 value = turn.get(field)
-                if isinstance(value, dict) and value.get('score') is not None and active and any(
-                        statuses[r['id']] is None for r in active if dimension_of(r) == DIMENSION[field]):
+                if not (isinstance(value, dict) and value.get('score') is not None and active): continue
+                own = [statuses[r['id']] for r in active if dimension_of(r) == DIMENSION[field]]
+                if None in own:
                     raise ValueError(f'{field}已打分，本轮{DIMENSION[field]}类要求状态未填完')
+                # na adds nothing to the miss counts, so a score would treat the unknown as satisfied.
+                if 'na' in own:
+                    raise ValueError(f'{field}有本轮无法判定（na）的要求，该维度score须为null并说明')
             for field in FIELDS:
                 value = turn.get(field)
                 if not isinstance(value, dict) or not valid_text(value.get('reason')):

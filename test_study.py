@@ -382,6 +382,15 @@ class FileCaseTests(unittest.TestCase):
                 self.assertEqual(run.finish(valid=True,acceptance=run.graded(flip=[0] if fabricated else [])), 'completed')
                 self.assertEqual(run.summary()[7],'无')
 
+    def test_desktop_snapshot_records_symlinks_without_following(self):
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as outside:
+            w=Path(d);(w/'a.txt').write_text('a');(Path(outside)/'secret.txt').write_text('s')
+            before=study.snapshot(w)
+            (w/'dir').symlink_to(outside,target_is_directory=True);(w/'f').symlink_to(w/'a.txt')
+            after=study.snapshot(w)
+            self.assertEqual(set(after)-set(before),{'dir','f'})
+            self.assertNotIn('dir/secret.txt',after)
+
     def test_recovery_detects_a_broken_symlink_as_a_new_path(self):
         with project('recovery-knowledge') as run:
             run.begin()

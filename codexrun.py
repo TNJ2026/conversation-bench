@@ -138,11 +138,15 @@ def snapshot(workspace):
     files = {}; artifacts = {}; limits = []
     # Bounded, no symlink traversal. Record omissions rather than silently treating snapshots as complete.
     for base,dirs,names in os.walk(workspace,followlinks=False):
+        for d in dirs:
+            p = Path(base)/d
+            # The link itself is a workspace change; its target is never read.
+            if p.is_symlink(): files[str(p.relative_to(workspace))] = study.link_entry(p)
         dirs[:] = [d for d in dirs if not (Path(base)/d).is_symlink()]
         for name in sorted(names):
             p = Path(base)/name; relative = str(p.relative_to(workspace))
             if p.is_symlink():
-                limits.append(relative+': symlink omitted'); continue
+                files[relative] = study.link_entry(p); continue
             if not p.is_file(): continue
             if len(files)>=200 or p.stat().st_size>2_000_000:
                 limits.append(relative+': snapshot limit'); continue

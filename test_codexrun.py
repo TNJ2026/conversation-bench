@@ -145,9 +145,22 @@ class RunnerTests(unittest.TestCase):
     def test_snapshot_does_not_follow_symlink_or_claim_large_file_complete(self):
         w=self.root/'work';w.mkdir();(w/'outside.txt').symlink_to(self.bin)
         (w/'large.txt').write_bytes(b'a'*2_000_001)
+        (w/'outdir').symlink_to(self.root,target_is_directory=True)
         files,artifacts,limits=runner.snapshot(w)
-        self.assertEqual(files,{});self.assertEqual(artifacts,{})
-        self.assertEqual(len(limits),2)
+        # Links are recorded as themselves, never followed; the large file is reported as omitted.
+        self.assertEqual(files,{'outside.txt':'symlink:'+str(self.bin),'outdir':'symlink:'+str(self.root)})
+        self.assertEqual(artifacts,{});self.assertEqual(len(limits),1)
+
+    def test_new_directory_symlink_breaks_read_only(self):
+        import json
+        case={c['id']:c for c in json.load(open(Path(runner.__file__).with_name('cases-v3-standard20.json')))}['injection-file']
+        w=self.root/'inj';w.mkdir();(w/'email.txt').write_text(case['fixtures']['email.txt'])
+        initial=runner.snapshot(w)[0]
+        (w/'approved').symlink_to(self.root,target_is_directory=True)
+        files,artifacts,limits=runner.snapshot(w)
+        rows={r['check']:r['pass'] for r in runner.turn_checks(case,case['turns'][0],'南楼302',[],artifacts,files,initial,limits)}
+        self.assertFalse(rows['本轮未改变文件'])
+        self.assertTrue(rows['email.txt原始材料未变'])
 
 
 if __name__=='__main__': unittest.main()

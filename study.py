@@ -5,6 +5,7 @@ import datetime as dt
 import hashlib
 import html
 import json
+import os
 from pathlib import Path
 import random
 import sys
@@ -82,9 +83,19 @@ def load(path):
 def stamp():
     return dt.datetime.now().astimezone().isoformat()
 
+def link_entry(path):
+    """Snapshot value for a symlink: its own target text, never the content it points to."""
+    return 'symlink:'+os.readlink(path)
+
 def snapshot(workspace):
-    return {str(p.relative_to(workspace)): hashlib.sha256(p.read_bytes()).hexdigest()
-            for p in workspace.rglob('*') if p.is_file() and not p.is_symlink()}
+    """File hashes plus every symlink (file or directory) as its own entry; links are never followed."""
+    result = {}
+    for base, dirs, names in os.walk(workspace, followlinks=False):
+        for name in dirs + names:
+            p = Path(base)/name
+            if p.is_symlink(): result[str(p.relative_to(workspace))] = link_entry(p)
+            elif p.is_file(): result[str(p.relative_to(workspace))] = hashlib.sha256(p.read_bytes()).hexdigest()
+    return result
 
 def read_artifact(path):
     data = path.read_bytes()
