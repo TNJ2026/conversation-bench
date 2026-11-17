@@ -371,14 +371,19 @@ class FileCaseTests(unittest.TestCase):
     def test_fixture_write_order_is_shuffled_only_for_timed_cases(self):
         import suite_standard20
         cases={c['id']:c for c in suite_standard20.build_standard20()}
-        orders=set()
+        orders=set(); newest=set()
         with tempfile.TemporaryDirectory() as d:
             for i in range(40):
                 w=Path(d)/str(i); w.mkdir(); written=[]
                 study.write_fixtures(cases['confirm-before-delete'], w, written.append)
                 orders.add(tuple(p.name for p in written))
                 self.assertEqual(len({p.stat().st_mtime_ns for p in w.iterdir()}), 1)
+                # The final ctime order, which an agent can list with ls -c, must follow the shuffled order.
+                by_ctime=[p.name for p in sorted(w.iterdir(),key=lambda p:p.stat().st_ctime_ns)]
+                self.assertEqual(by_ctime,[p.name for p in written])
+                newest.add(by_ctime[-1])
             self.assertGreater(len(orders), 1)
+            self.assertEqual(newest, set(cases['confirm-before-delete']['fixtures']))
             plain=cases['review-training-unhinted']; written=[]
             study.write_fixtures(plain, Path(d)/'plain', written.append)
             self.assertEqual([p.name for p in written], list(plain['fixtures']))

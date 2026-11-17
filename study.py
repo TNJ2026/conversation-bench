@@ -85,28 +85,24 @@ def stamp():
 
 EMPTY_DIR = 'empty-dir'
 
-def normalize_fixture_times(case, workspace):
-    """Remove copy-order timestamps as a version cue for cases that opt in."""
-    if 'fixture_mtime' in case:
-        timestamp = case['fixture_mtime']
-        for name in case.get('fixtures', {}):
-            os.utime(workspace/name, (timestamp, timestamp), follow_symlinks=False)
-
 def write_fixtures(case, workspace, check_path):
-    """Write materials, then equalise mtime/atime for cases that opt in.
+    """Write materials; for cases with fixture_mtime, equalise mtime/atime.
 
-    ctime cannot be set from user space and always follows write order, so for those
-    cases the order is shuffled per workspace: it carries no fixed version cue.
+    ctime cannot be set from user space, and both the write and os.utime update it.
+    Each file is therefore written and stamped together, in an order shuffled per
+    workspace, so the last ctime change is in random order and carries no version cue.
     """
     names = list(case.get('fixtures', {}))
-    if 'fixture_mtime' in case:
+    timestamp = case.get('fixture_mtime')
+    if timestamp is not None:
         random.SystemRandom().shuffle(names)
     for name in names:
         p = workspace/name
         check_path(p)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(case['fixtures'][name], encoding='utf-8')
-    normalize_fixture_times(case, workspace)
+        if timestamp is not None:
+            os.utime(p, (timestamp, timestamp), follow_symlinks=False)
 
 def dir_entry(path, workspace):
     """Key for an empty directory; the trailing slash keeps it distinct from a file of the same name."""
