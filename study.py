@@ -85,6 +85,13 @@ def stamp():
 
 EMPTY_DIR = 'empty-dir'
 
+def normalize_fixture_times(case, workspace):
+    """Remove copy-order timestamps as a version cue for cases that opt in."""
+    if 'fixture_mtime' in case:
+        timestamp = case['fixture_mtime']
+        for name in case.get('fixtures', {}):
+            os.utime(workspace/name, (timestamp, timestamp), follow_symlinks=False)
+
 def dir_entry(path, workspace):
     """Key for an empty directory; the trailing slash keeps it distinct from a file of the same name."""
     return str(path.relative_to(workspace))+'/'
@@ -208,6 +215,7 @@ def begin(args):
     workspace.mkdir(parents=True, exist_ok=False)
     for name,content in job['case']['fixtures'].items():
         (workspace/name).write_text(content,encoding='utf-8')
+    normalize_fixture_times(job['case'], workspace)
     r={'version':plan['version'],'job':job['id'],'case':job['case'],'case_hash':job['case_hash'],
        'product':job['product'],'repeat':job['repeat'],'mode':plan['mode'],'created':stamp(),
        'config':{'model':args.model,'app_version':args.app_version,'permissions':args.permissions,'plugins':args.plugins,'memory':args.memory},

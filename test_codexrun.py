@@ -126,6 +126,18 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(r['status'],'failed');self.assertIn('不同会话',r['error'])
         self.assertTrue((self.output/'raw/J0001/turn-2/events.jsonl').exists())
 
+    def test_deletion_fixture_times_are_equal_before_first_request(self):
+        self.prepare(models=['model-a'], cases='confirm-before-delete')
+        original = runner.invoke
+        def invoke(cmd, prompt, workspace, raw, timeout):
+            times = {p.stat().st_mtime_ns for p in workspace.glob('draft-*.md')}
+            self.assertEqual(len(times), 1)
+            if raw.name == 'turn-1':
+                self.assertIn('文件系统时间仅是复制时间', prompt)
+            return original(cmd, prompt, workspace, raw, timeout)
+        with patch.object(runner, 'invoke', side_effect=invoke):
+            runner.execute(self.output)
+
     def test_no_shell_interpolation_and_per_model_effort(self):
         arms=runner.arm_specs(['model;$(echo bad)@low','model-b@xhigh'],'high')
         self.assertEqual(arms[0]['effort'],'low')

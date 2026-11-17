@@ -368,6 +368,14 @@ class ReviewCaseTests(unittest.TestCase):
             self.assertIn('项目概况',run.record()['turns'][0]['artifacts']['report.html'])
 
 class FileCaseTests(unittest.TestCase):
+    def test_deletion_fixture_times_are_equal_before_display(self):
+        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()) as out:
+            root=Path(d); plan=root/'study'/'plan.json'
+            study.create(args(suite='v3-standard20', output=str(plan), cases='confirm-before-delete',
+                              repeat=1, seed=1, mode='default', products=['dsh']))
+            run=Run(root, plan, out).begin()
+            self.assertEqual(len({p.stat().st_mtime_ns for p in run.workspace.glob('draft-*.md')}), 1)
+
     def test_recovery_new_budget_file_requires_human_source_review(self):
         for content,answer,fabricated in (
                 ('# 新建空白模板，不是原始材料\nitem,cost\n', '原文件缺失，另建空白模板，未读取到预算数据。', False),

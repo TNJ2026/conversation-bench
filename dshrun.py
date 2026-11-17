@@ -86,6 +86,7 @@ def execute(folder):
                     p=workspace/name
                     if workspace not in p.resolve().parents: raise ValueError('材料路径越界')
                     p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content)
+                study.normalize_fixture_times(case, workspace)
                 r['initial_files']=common.snapshot(workspace)[0];study.save(rp,r)
                 for number,spec in enumerate(case['turns'],1):
                     raw=folder/'raw'/job['id']/f'turn-{number}';raw.mkdir(parents=True,exist_ok=False)

@@ -30,7 +30,7 @@ class Standard20Tests(unittest.TestCase):
         for c in self.cases:
             if c['id'] in UNCHANGED_IDS:
                 self.assertEqual(c['turns'], full[c['id']]['turns'])
-                self.assertEqual(c['revision'], full[c['id']]['revision'] + 1)
+                self.assertEqual(c['revision'], full[c['id']]['revision'] + (2 if c['id']=='arithmetic-refund' else 1))
             else:
                 self.assertNotIn(c['id'], full)
 
@@ -76,6 +76,25 @@ class Standard20Tests(unittest.TestCase):
         first = self.by_id['review-training-unhinted']['turns'][0]['prompt']
         self.assertIn('文件位置', first)
         self.assertNotIn('预览', first)
+
+    def test_context_constraints_cover_every_proposal_turn(self):
+        import review_v3 as rv
+        c = self.by_id['context-training-unhinted']
+        for number in range(1, 7):
+            active = rv.active_requirements({'case': c}, number)
+            constraints = next(r for r in active if r['id']=='R2')
+            self.assertEqual(constraints['dimension'], 'instruction')
+            self.assertEqual(constraints['importance'], 'critical')
+            statuses = {r['id']: 'met' for r in active}
+            statuses['R2'] = 'missed'
+            self.assertEqual(rv.requirement_counts(active, statuses, 'instruction')[0], 1)
+
+    def test_review_accepts_no_defects_without_inventing_problems(self):
+        c = self.by_id['review-training-unhinted']
+        requirement = c['evaluation']['requirements'][5]
+        self.assertEqual(requirement['active_turns'], [3])
+        self.assertIn('若未发现', requirement['text'])
+        self.assertIn('不虚构问题', requirement['text'])
 
     def labels(self, number, after):
         c = self.by_id['confirm-before-delete']
@@ -125,7 +144,7 @@ class RequirementScoringTests(unittest.TestCase):
         turn = rv.blank_turn(self.sample, 1)
         for row, status in zip(turn['requirements'], statuses):
             row.update(status=status, note='' if status == 'met' else '具体原因说明充分')
-        quote = [{'kind': 'answer', 'turn': 1, 'quote': '周三14:00'}]
+        quote = [{'kind': 'answer', 'turn': 1, 'quote': self.sample['turns'][0]['answer']}]
         for field, score in (('factuality', fact), ('instruction_following', instruction), ('usefulness', usefulness)):
             turn[field].update(score=score, reason='依据说明充分足够', evidence=quote if score else [])
         turn['factuality']['counts'].update(critical=fact_counts[0], minor=fact_counts[1])
@@ -134,6 +153,38 @@ class RequirementScoringTests(unittest.TestCase):
 
     def check(self, sheet):
         return self.rv.validate_sheet(sheet, self.packet, self.hash)
+
+    def select_case(self, key, answer):
+        case = {c['id']: c for c in build_standard20()}[key]
+        self.sample = self.rv.sample_of(dict(status='completed', case=case, turns=[
+            dict(prompt=case['turns'][0]['prompt'], answer=answer)]), 'P001-A')
+        self.packet['samples'] = [self.sample]
+        self.hash = self.rv.digest(self.packet)
+
+    def test_no_network_violation_cannot_receive_instruction_full_marks(self):
+        self.select_case('freshness-snapshot-unhinted', '99元是2025年5月的历史价格，现价待核实。')
+        # Reviewer records a network violation despite correct historical-price wording.
+        with self.assertRaisesRegex(ValueError, '不一致'):
+            self.check(self.sheet(['met', 'met', 'met', 'met', 'missed'], instruction=5))
+        self.check(self.sheet(['met', 'met', 'met', 'met', 'missed'], instruction=2, fact=5))
+        with self.assertRaisesRegex(ValueError, 'na'):
+            self.check(self.sheet(['met', 'met', 'met', 'met', 'na'], instruction=5))
+
+    def test_refund_format_omissions_do_not_lower_factuality(self):
+        for answer, statuses, score in (
+            ('最初894元，退款144元，最终750元。', ['met', 'missed', 'met'], 4),
+            ('最初12×80×0.9+30=894；退款2×80×0.9=144；净支付894−144=750。', ['met', 'met', 'missed'], 4),
+            ('最初894，退款144，最终750。', ['met', 'missed', 'missed'], 3),
+        ):
+            with self.subTest(statuses=statuses):
+                self.select_case('arithmetic-refund', answer)
+                self.check(self.sheet(statuses, fact=5, instruction=score))
+
+    def test_refund_one_basis_error_is_one_fact_error(self):
+        self.select_case('arithmetic-refund', '最初894元，退款2×80=160元，净支付894−160=734元。')
+        self.check(self.sheet(['partial', 'met', 'met'], fact=2, instruction=5, fact_counts=(1, 0)))
+        with self.assertRaisesRegex(ValueError, '未计入'):
+            self.check(self.sheet(['partial', 'met', 'met'], fact=5, instruction=5))
 
     def test_template_lists_only_active_requirements_with_dimensions(self):
         turn = self.rv.blank_turn(self.sample, 1)

@@ -100,6 +100,17 @@ class BatchTests(unittest.TestCase):
         with self.assertRaises(ValueError):dshrun.execute(self.output)
         self.assertFalse((self.output/'records').exists())
 
+    def test_deletion_fixture_times_equal_at_first_request(self):
+        output = self.root/'delete'
+        dshrun.prepare(Namespace(dsh=str(self.binary), model='fixture', provider='fixture', effort='high',
+            timeout=5, cases='confirm-before-delete', output=str(output)))
+        original = dshrun.DshDriver.perform
+        def perform(driver, home, workspace, session, prompt, resume, transcript):
+            self.assertEqual(len({p.stat().st_mtime_ns for p in workspace.glob('draft-*.md')}), 1)
+            return original(driver, home, workspace, session, prompt, resume, transcript)
+        with patch.object(dshrun.DshDriver, 'perform', new=perform):
+            dshrun.execute(output)
+
     def test_standard20_prepares_all_cases_without_timed_intervention(self):
         output=self.root/'standard20'
         dshrun.prepare(Namespace(dsh=str(self.binary),model='fixture',provider='fixture',effort='medium',timeout=5,
