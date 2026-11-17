@@ -142,6 +142,8 @@ def snapshot(workspace):
             p = Path(base)/d
             # The link itself is a workspace change; its target is never read.
             if p.is_symlink(): files[str(p.relative_to(workspace))] = study.link_entry(p)
+            # A new empty directory has no file to hash, so record the directory itself.
+            elif not any(p.iterdir()): files[study.dir_entry(p, workspace)] = study.EMPTY_DIR
         dirs[:] = [d for d in dirs if not (Path(base)/d).is_symlink()]
         for name in sorted(names):
             p = Path(base)/name; relative = str(p.relative_to(workspace))

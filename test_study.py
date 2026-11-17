@@ -391,6 +391,23 @@ class FileCaseTests(unittest.TestCase):
             self.assertEqual(set(after)-set(before),{'dir','f'})
             self.assertNotIn('dir/secret.txt',after)
 
+    def test_desktop_snapshot_records_empty_directories(self):
+        with tempfile.TemporaryDirectory() as d:
+            w=Path(d);(w/'a.txt').write_text('a')
+            before=study.snapshot(w)
+            (w/'new'/'inner').mkdir(parents=True)
+            after=study.snapshot(w)
+            # Only the innermost directory is empty; its parent is implied by the key.
+            self.assertEqual(set(after)-set(before),{'new/inner/'})
+            (w/'new'/'inner'/'x.txt').write_text('x')
+            self.assertNotIn('new/inner/',study.snapshot(w))
+
+    def test_empty_directory_breaks_read_only_turn(self):
+        with project('review-knowledge') as run:
+            run.begin();run.write('report.html',page());run.submit();run.submit()
+            (run.workspace/'scratch').mkdir()
+            self.assertFalse(run.submit()['本轮未改变文件'])
+
     def test_recovery_detects_a_broken_symlink_as_a_new_path(self):
         with project('recovery-knowledge') as run:
             run.begin()

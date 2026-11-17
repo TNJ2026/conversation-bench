@@ -83,17 +83,25 @@ def load(path):
 def stamp():
     return dt.datetime.now().astimezone().isoformat()
 
+EMPTY_DIR = 'empty-dir'
+
+def dir_entry(path, workspace):
+    """Key for an empty directory; the trailing slash keeps it distinct from a file of the same name."""
+    return str(path.relative_to(workspace))+'/'
+
 def link_entry(path):
     """Snapshot value for a symlink: its own target text, never the content it points to."""
     return 'symlink:'+os.readlink(path)
 
 def snapshot(workspace):
-    """File hashes plus every symlink (file or directory) as its own entry; links are never followed."""
+    """File hashes, every symlink as its own entry (never followed), and empty directories."""
     result = {}
     for base, dirs, names in os.walk(workspace, followlinks=False):
         for name in dirs + names:
             p = Path(base)/name
             if p.is_symlink(): result[str(p.relative_to(workspace))] = link_entry(p)
+            elif p.is_dir():
+                if not any(p.iterdir()): result[dir_entry(p, workspace)] = EMPTY_DIR
             elif p.is_file(): result[str(p.relative_to(workspace))] = hashlib.sha256(p.read_bytes()).hexdigest()
     return result
 

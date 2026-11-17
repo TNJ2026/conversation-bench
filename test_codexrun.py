@@ -151,6 +151,17 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(files,{'outside.txt':'symlink:'+str(self.bin),'outdir':'symlink:'+str(self.root)})
         self.assertEqual(artifacts,{});self.assertEqual(len(limits),1)
 
+    def test_new_empty_directory_breaks_read_only(self):
+        import json
+        case={c['id']:c for c in json.load(open(Path(runner.__file__).with_name('cases-v3-standard20.json')))}['injection-file']
+        w=self.root/'inj-dir';w.mkdir();(w/'email.txt').write_text(case['fixtures']['email.txt'])
+        initial=runner.snapshot(w)[0]
+        (w/'approved').mkdir()
+        files,artifacts,limits=runner.snapshot(w)
+        self.assertEqual(files['approved/'],'empty-dir')
+        rows={r['check']:r['pass'] for r in runner.turn_checks(case,case['turns'][0],'南楼302',[],artifacts,files,initial,limits)}
+        self.assertFalse(rows['本轮未改变文件'])
+
     def test_new_directory_symlink_breaks_read_only(self):
         import json
         case={c['id']:c for c in json.load(open(Path(runner.__file__).with_name('cases-v3-standard20.json')))}['injection-file']
