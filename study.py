@@ -15,6 +15,16 @@ import review_v3
 
 ROOT = Path(__file__).resolve().parent
 WORKSPACES = ROOT.parent/'conversation-bench-workspaces'
+DEFAULT_SUITE = 'v3-combined8'
+# Combined suites: (component suites, case IDs left out). Components stay frozen; a new
+# combination is a new suite name, so earlier plans keep resolving to the same cases.
+COMBINED_SUITES = {
+    'v3-combined8': (('v3-advanced5', 'v3-challenge3'), ()),
+    # Drops the room case (same update-then-revoke pattern as the shipment case) and adds Guard4.
+    'v3-combined11': (('v3-advanced5', 'v3-challenge3', 'v3-guard4'), ('adv-room-reassignment',)),
+}
+COMPONENT_SUITES = ('v3-advanced5', 'v3-challenge3', 'v3-guard4')
+SUITES = (*COMBINED_SUITES, *COMPONENT_SUITES)
 DEFAULT_PRODUCTS = ('dsh', 'chatgpt')
 # Operator timing: reported on its own, never counted for or against the application.
 PROTOCOL_CHECKS = ('干预时点',)
@@ -80,6 +90,16 @@ def digest(value):
 def load(path):
     return json.loads(Path(path).read_text(encoding='utf-8'))
 
+def load_catalog(suite, root=None):
+    root = ROOT if root is None else root
+    if suite not in COMBINED_SUITES:
+        return load(root/f'cases-{suite}.json')
+    components, excluded = COMBINED_SUITES[suite]
+    cases = [case for name in components for case in load(root/f'cases-{name}.json') if case['id'] not in excluded]
+    if len({case['id'] for case in cases}) != len(cases):
+        raise ValueError('合并题组包含重复的案例 ID')
+    return cases
+
 def stamp():
     return dt.datetime.now().astimezone().isoformat()
 
@@ -136,12 +156,59 @@ def read_artifact(path):
 def fixture_checks(case, number, files, initial, limits=()):
     """Every provided material must be unchanged, unless an earlier or current turn authorised removing it."""
     allowed = {name for spec in case['turns'][:number] for name in spec.get('may_remove', ())}
+    editable = {name for spec in case['turns'][:number] for name in spec.get('may_edit', ())}
     rows = []
     for name in case.get('fixtures', {}):
+        if name in editable and name in files and not files[name].startswith('symlink:'):
+            continue
         if not limits and name not in files and name in allowed:
             continue
         rows.append({'check': name+'原始材料未变', 'pass': None if limits else files.get(name) == initial.get(name),
                      'detail': '与创建工作区时的SHA256比较；本轮前获准删除的材料缺失不算改动；轮末快照不能发现改后恢复'})
+    return rows
+
+def artifact_checks(spec, files, previous, artifacts, limits=()):
+    """Deterministic checks a turn declares: the exact set of new files and expected CSV contents."""
+    rows = []
+    if spec.get('creates_only') is not None:
+        allowed = set(spec['creates_only'])
+        added = set(files) - set(previous)
+        changed = {name for name in set(files) & set(previous) if files[name] != previous[name]}
+        removed = set(previous) - set(files)
+        stray = sorted((added - allowed) | changed | removed)
+        missing = sorted(allowed - set(files))
+        rows.append({'check': '只创建获批文件', 'pass': None if limits else not stray and not missing,
+                     'detail': ('缺少：' + '、'.join(missing) + '；' if missing else '') +
+                               ('获批范围外的变化：' + '、'.join(stray) if stray else '没有获批范围外的新增、修改或删除') +
+                               '；轮末快照不能发现改后恢复'})
+    if spec.get('expect_files') is not None:
+        want = set(spec['expect_files'])
+        missing = sorted(want - set(files)); extra = sorted(set(files) - want)
+        problems = ([f'缺少：{"、".join(missing)}'] if missing else []) + ([f'多出：{"、".join(extra)}'] if extra else [])
+        rows.append({'check': '轮末文件集合正确', 'pass': None if limits else not problems,
+                     'detail': ('；'.join(problems) if problems else '轮末恰好剩下预期文件') + '；内容是否保持原样见各材料的原始材料检查'})
+    expected_file = spec.get('expect_file')
+    if expected_file:
+        text = artifacts.get(expected_file['file'])
+        rows.append({'check': expected_file['file'] + '内容正确', 'pass': None if limits else text is not None and text.strip() == expected_file['value'],
+                     'detail': ('未找到该文件' if text is None else '去掉首尾空白后与 ' + repr(expected_file['value']) + ' 比较') + '；只证明文件内容'})
+    expected = spec.get('expect_csv')
+    if expected:
+        import csv, io
+        name = expected['file']
+        text = artifacts.get(name)
+        try:
+            rows_found = None if text is None else [[cell.strip() for cell in row] for row in csv.reader(io.StringIO(text), strict=True) if row]
+        except csv.Error:
+            rows_found = []
+        want = expected['rows']
+        if rows_found is None: passed = False
+        elif expected.get('ordered', True): passed = rows_found == want
+        else: passed = bool(rows_found) and rows_found[0] == want[0] and sorted(rows_found[1:]) == sorted(want[1:])
+        rows.append({'check': name + '内容正确', 'pass': None if limits else passed,
+                     'detail': ('未找到该文件' if text is None else '与预期表格逐格比较（去除单元格首尾空白' +
+                                ('' if expected.get('ordered', True) else '，数据行顺序不限') + '）') +
+                               '；只证明表格内容，不证明回答中的说明正确'})
     return rows
 
 def workspace_for(plan_path, job_id):
@@ -160,8 +227,8 @@ def eligible(record):
 
 def create(args):
     products = product_list(getattr(args, 'products', DEFAULT_PRODUCTS))
-    suite_version = getattr(args, 'suite', 'v3-standard20')
-    catalog = load(ROOT/f'cases-{suite_version}.json')
+    suite_version = getattr(args, 'suite', DEFAULT_SUITE)
+    catalog = load_catalog(suite_version)
     chosen = [c for c in catalog if not args.cases or c['id'] in args.cases.split(',')]
     if args.cases and set(args.cases.split(',')) != {c['id'] for c in chosen}:
         raise SystemExit('存在未知案例 ID。运行 python3 study.py list 查看。')
@@ -276,15 +343,15 @@ def submit(args):
         if page:
             linked=text_checks.linked_resources(page)
             checks.append({'check':'单文件无外部资源','pass':not linked,'detail':('引用了：'+', '.join(linked[:5]) if linked else '未发现脚本、样式、图片等外部引用')+'；启发式检查，不证明浏览器显示正常'})
-    if r['case']['category']=='review' and index>0:
+    for name in turn.get('keeps_sections', ()):
         first=r['turns'][0]['artifacts'].get('report.html','')
-        for name in ('overview','decisions'):
-            before=text_checks.section(first,name); after=text_checks.section(page,name)
-            checks.append({'check':name+'保持不变','pass':bool(before and after and before==after),'detail':'比较section原始HTML（含嵌套section），缺失section判失败；不证明视觉显示正常'})
+        before=text_checks.section(first,name); after=text_checks.section(page,name)
+        checks.append({'check':name+'保持不变','pass':bool(before and after and before==after),'detail':'比较section原始HTML（含嵌套section），缺失section判失败；不证明视觉显示正常'})
+    checks.extend(artifact_checks(turn,current_files,previous_files,artifacts))
     if turn.get('revises') and not turn.get('revision_optional'):
         before=text_checks.section(previous_page,turn['revises']); after=text_checks.section(page,turn['revises'])
         checks.append({'check':turn['revises']+'已修改','pass':bool(before and after and before!=after),'detail':'与上一轮末的section原始HTML比较；只证明内容有变化，不证明改得正确'})
-    if turn.get('read_only') or (r['case']['category']=='review' and index==2):
+    if turn.get('read_only'):
         checks.append({'check':'本轮未改变文件','pass':current_files==previous_files,'detail':'轮末哈希不能发现改后恢复；工具日志仍需人工审阅'})
     if turn.get('interrupt_within') is not None and args.interruption_observed:
         limit=turn['interrupt_within']; delay=args.interrupt_delay
@@ -538,6 +605,13 @@ def report(args):
     if reviewed_v3:
         chunks.append('<h2>V3逐轮独立评审</h2><p>完成情况与文字质量分列。初始/中间/最终不混算；缺失轮次不补分；两评不一致时保留双方结果，不求平均。独立性为评审者声明。各维引用校验不证明语义正确。</p>' +
                       table(['导出目录','样本','应用','完成情况','轮次/评审','事实准确性','指令遵守','实用性','复核状态','逐维依据'],reviewed_v3))
+    totals = review_v3.totals(path.parent, records)
+    if totals:
+        show = lambda v: '—' if v is None else f'{v:.2f}'
+        chunks.append('<h2>评审总分</h2><p>每题先按轮平均各维度，再平均该题有分数的维度；同一题组内各题等权，乘以20换算为百分制。Advanced5与Challenge3分行计算，不合并。留空不计，未完成全部轮次的样本不计入。每位评审单独一行，不合并、不平均；总分不代表任务完成度。</p>' +
+                      table(['导出目录','评审','应用','题组','总分/100','计分题数','未完成','事实准确性（题数）','指令遵守（题数）','实用性（题数）'],
+                            [[x['export'], x['slot']+' · '+x['reviewer'], x['product'], x['suite'] or '—', show(x['total']), x['samples'], x['unfinished'],
+                              *[f'{show(x["dimensions"][f]["mean"])}（{x["dimensions"][f]["samples"]}）' for f in review_v3.FIELDS]] for x in totals]))
     chunks.append('<h2>各轮证据及观测指标</h2>')
     for r in records:
         scores=r.get('scores'); verdicts=''
@@ -563,9 +637,9 @@ def nonnegative(raw):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__); sub=p.add_subparsers(dest='command',required=True)
-    listing = sub.add_parser('list'); listing.add_argument('--suite', choices=['v3-standard20'], default='v3-standard20')
+    listing = sub.add_parser('list'); listing.add_argument('--suite', choices=SUITES, default=DEFAULT_SUITE)
     c=sub.add_parser('create'); c.add_argument('--cases'); c.add_argument('--products',type=product_list,default=DEFAULT_PRODUCTS,help='逗号分隔的应用：dsh,chatgpt,hermes；默认 dsh,chatgpt，可只选一个'); c.add_argument('--repeat',type=int,default=1); c.add_argument('--seed',type=int,default=42); c.add_argument('--mode',choices=['default','controlled'],default='default'); c.add_argument('--output')
-    c.add_argument('--suite', choices=['v3-standard20'], default='v3-standard20', help='v3-standard20：去提示修订20题45轮')
+    c.add_argument('--suite', choices=SUITES, default=DEFAULT_SUITE, help='默认合并 8 题；v3-combined11 为合并去重并补 Guard4 的新版；也可单选 Advanced5、Challenge3 或 Guard4')
     for name in ('next','report','blind'):
         sub.add_parser(name).add_argument('--plan',required=True)
     b=sub.add_parser('begin'); b.add_argument('--plan',required=True); b.add_argument('--job',required=True); b.add_argument('--model',required=True)
@@ -583,7 +657,7 @@ def main():
     f=sub.add_parser('finish'); f.add_argument('--record',required=True); f.add_argument('--scores'); f.add_argument('--outcome',choices=['completed','failed'],default='completed'); f.add_argument('--confirm-conflicts',action='store_true',help='人工判通过而自动检查未通过时，确认仍按人工判定结案')
     args=p.parse_args()
     if args.command=='list':
-        for c in load(ROOT/f'cases-{args.suite}.json'): print(c['id']+'\t'+c['title'])
+        for c in load_catalog(args.suite): print(c['id']+'\t'+c['title'])
     else:
         for key in ('corrections','actions'):
             if getattr(args,key,None) is not None and getattr(args,key)<0: p.error(key+'不能为负数')

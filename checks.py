@@ -3,7 +3,8 @@ import re
 from html.parser import HTMLParser
 
 PRODUCTS = ('dsh', 'chatgpt', 'hermes')
-KINDS = ('contains', 'dates', 'length', 'paragraphs', 'paragraph', 'no_heading', 'preserve')
+KINDS = ('contains', 'dates', 'length', 'paragraphs', 'paragraph', 'no_heading', 'preserve',
+         'exact', 'json', 'excludes', 'sentences')
 
 FULL_DATE = re.compile(r'(?<!\d)(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})(?!\d)')
 MONTH_DAY = re.compile(r'(?<!\d)(\d{1,2})\s*月\s*(\d{1,2})(?!\d)')
@@ -129,6 +130,12 @@ def check_dates(text, values):
         return None, '只出现缺少年份的写法，需人工确认：' + ', '.join(missing)
     return False, '缺少：' + ', '.join(missing)
 
+SENTENCE_END = re.compile(r'[。！？!?]+')
+
+def sentences(text):
+    """Sentences ended by Chinese or Western terminal punctuation; trailing text without one also counts."""
+    return [part.strip() for part in SENTENCE_END.split(normalize(text)) if part.strip()]
+
 def check(text, rules, earlier):
     results = []
     for rule in rules:
@@ -169,6 +176,29 @@ def check(text, rules, earlier):
             else:
                 excerpt = parts[index]
                 results.append({'check': '保留指定段落', 'pass': excerpt in normalize(text), 'detail': '按空行识别，人工确认选段是否正确。原段：' + excerpt})
+        elif kind == 'exact':
+            results.append({'check': rule.get('label', '回答与指定值一致'), 'pass': text.strip() == rule['value'],
+                            'detail': '去掉首尾空白后整条回复须等于 ' + repr(rule['value']) + '；附加任何说明都判不一致'})
+        elif kind == 'json':
+            import json
+            try:
+                parsed = json.loads(text.strip())
+                if 'keys' in rule:
+                    problem = None if isinstance(parsed, dict) and set(parsed) == set(rule['keys']) else '不是只含指定键的JSON对象'
+                else:
+                    problem = None if parsed == rule['value'] else '键或值与预期不同'
+            except ValueError:
+                problem = '整条回复不是可解析的JSON（代码围栏或前后说明也会导致失败）'
+            results.append({'check': rule.get('label', 'JSON与预期一致'), 'pass': problem is None,
+                            'detail': (problem or '解析结果与预期对象完全相同') + '；键顺序不限，数字与字符串类型须一致'})
+        elif kind == 'excludes':
+            found = [x for x in rule['values'] if x in text]
+            results.append({'check': rule.get('label', '不含指定文本'), 'pass': not found,
+                            'detail': '出现：' + ', '.join(found) if found else '均未出现；只做字面匹配，换说法需人工确认'})
+        elif kind == 'sentences':
+            count = len(sentences(text))
+            results.append({'check': rule.get('label', '句数'), 'pass': count == rule['count'],
+                            'detail': f'按句末标点（。！？!?）识别 {count} 句，要求 {rule["count"]} 句；启发式，省略号、引号内句号需人工确认'})
         else:
             results.append({'check': '未知检查类型：' + str(kind), 'pass': None, 'detail': '当前版本无法执行该检查，需人工审阅'})
     return results

@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 import checks
 import study
-import suite
+from suite_common import case, turn
 
 BEGIN=dict(model='test-model',app_version='1',permissions='test',plugins='none',memory='off',
            method='desktop',isolated=True,unexposed=True)
@@ -78,14 +78,91 @@ class Run:
         text=self.out.getvalue();self.out.seek(0);self.out.truncate(0)
         return text
 
+def timed_file_case():
+    return case('timed-file-fixture', 'file', 'Timed file fixture',
+                [turn('List the draft files.', read_only=True)], [], ('ready', 'partial', 'missing'), [],
+                fixtures={f'draft-{i}.md': str(i) for i in range(1, 4)}, fixture_mtime=1700000000)
+
+
+def read_only_case():
+    return case('read-only-fixture', 'file', 'Read-only fixture',
+                [turn('Read the workspace listing.', read_only=True)], [], ('ready', 'partial', 'missing'), [],
+                fixtures={'email.txt': 'Local test input.'})
+
+
+
+def legacy_fixture(key, category, turns, acceptance, **details):
+    return dict(id=key, title=key, category=category, revision=1, setup='Synthetic test setup.',
+                turns=turns, acceptance=acceptance, auto={}, fixtures={}, **details)
+
+
+def review_case():
+    fixture = legacy_fixture(
+        'fixture-review', 'review',
+        [turn('Write the fixture HTML.', sections=['overview', 'risks', 'decisions']),
+         turn('Revise the risk section.', capture_before=True, revises='risks', keeps_sections=['overview', 'decisions']),
+         turn('Review the fixture without writing.', read_only=True, keeps_sections=['overview', 'decisions']),
+         turn('Update only the risk section.', revises='risks', keeps_sections=['overview', 'decisions'])],
+        ['HTML complete', 'Risk section updated', 'Protected HTML preserved', 'Discussion stayed read-only',
+         'Source file preserved'])
+    fixture['fixtures'] = {'meeting.txt': 'Synthetic meeting data.'}
+    fixture['auto'] = {'Protected HTML preserved': [[None, 'overview保持不变'], [None, 'decisions保持不变']]}
+    return fixture
+
+
+def interrupt_case(version=2):
+    turns = [turn('Start writing the fixture.', interrupt_with='先停止写文件，回复当前状态。',
+                  interrupt_within=5, operator='在目标仍运行时发送后续指令。'),
+             turn('Describe the result without writing.', read_only=True)]
+    acceptance = ['Intervention was observed', 'Stopped writing', 'Reported the work', 'Stayed read-only']
+    if version == 3:
+        return case('fixture-interrupt', 'interrupt', 'Synthetic interrupt fixture', turns,
+                    [(criterion, 'critical', [1] if i < 3 else [2]) for i, criterion in enumerate(acceptance)],
+                    ('complete', 'partial', 'missing'), ['Local test data.'],
+                    fixtures={'meeting.txt': '预算上限为虚构测试数据。'})
+    fixture = legacy_fixture('fixture-interrupt', 'interrupt', turns, acceptance)
+    fixture['fixtures'] = {'meeting.txt': 'Synthetic meeting data.'}
+    fixture['auto'] = {'Stayed read-only': [[2, '本轮未改变文件']]}
+    return fixture
+
+
+def synthetic_catalog():
+    review = review_case()
+    interrupted = interrupt_case()
+    lifecycle = legacy_fixture('fixture-lifecycle', 'ambiguity',
+                               [turn(f'Lifecycle step {i}.') for i in range(1, 5)],
+                               [f'Fixture requirement {i}' for i in range(1, 6)])
+    recovery = legacy_fixture('fixture-recovery', 'recovery',
+                              [turn(f'Recovery test step {i}.') for i in range(1, 5)],
+                              ['Missing context reported', 'Available facts used'])
+    recovery.update(fixtures={'meeting.txt': 'Synthetic meeting data.'}, absent=['budget-detail.csv'])
+    dates = {'kind': 'dates', 'values': ['2026-12-15', '2026-12-18']}
+    long = [{'kind': 'length', 'min': 450, 'max': 550}, dates,
+            {'kind': 'paragraphs', 'count': 4}, {'kind': 'no_heading'},
+            {'kind': 'paragraph', 'index': 2, 'value': FIXED}]
+    short = [{'kind': 'length', 'max': 220}, dates,
+             {'kind': 'contains', 'label': '保留固定句', 'values': [FIXED]},
+             {'kind': 'preserve', 'turn': 2, 'paragraph': 2}]
+    revision = legacy_fixture(
+        'fixture-revision', 'revision',
+        [turn('Write a layout fixture.', long), turn('Repeat with the same layout.', long),
+         turn('Produce a shorter answer.', short), turn('Review the revision.'), turn('Finish the fixture.', short)],
+        ['First layout', 'Length check', 'Fixed wording', 'Discussion', 'Final response'])
+    revision['auto'] = {'Fixed wording': [[3, '保留固定句'], [5, '保留指定段落']]}
+    extra = legacy_fixture('fixture-ordering', 'order', [turn('Keep the input.')], ['Input preserved'])
+    return [lifecycle, review, interrupted, recovery, revision, extra]
+
+
+
 @contextlib.contextmanager
 def project(*case_ids,products=('dsh',)):
     with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()) as out:
         root=Path(directory)/'project';root.mkdir()
-        catalog={c['id']:c for c in suite.build()}
-        study.save(root/'cases-v2.json',[catalog[i] for i in case_ids])
-        # The CLI only offers the default suite; serve the same fixture cases under that name.
-        study.save(root/'cases-v3-standard20.json',[catalog[i] for i in case_ids])
+        catalog={c['id']:c for c in synthetic_catalog()}
+        selected = [catalog[item] if isinstance(item, str) else item for item in case_ids]
+        study.save(root/'cases-v2.json', selected)
+        study.save(root/'cases-v3-advanced5.json', selected)
+        study.save(root/'cases-v3-challenge3.json', [])
         plan=root/'studies'/'test'/'plan.json'
         # WORKSPACES covers every begin in the test, including ones issued through the CLI.
         with patch.object(study,'ROOT',root), patch.object(study,'WORKSPACES',root/'workspaces'):
@@ -93,48 +170,18 @@ def project(*case_ids,products=('dsh',)):
             yield Run(root,plan,out)
 
 class CatalogTests(unittest.TestCase):
-    def test_catalog_has_three_cases_per_category(self):
-        catalog=suite.build()
-        self.assertEqual(len({c['id'] for c in catalog}),18)
-        for category in ('ambiguity','revision','context','recovery','review','interrupt'):
-            self.assertEqual(sum(c['category']==category for c in catalog),3)
-        for c in catalog:
-            if c['category']=='revision':
-                self.assertEqual(c['turns'][0]['checks'][0]['min'],450)
-                self.assertNotIn('220',c['turns'][-1]['prompt'])
-
     def test_every_rule_kind_is_implemented(self):
-        for c in suite.build():
+        for c in synthetic_catalog():
             for turn in c['turns']:
                 for rule in turn['checks']:
                     self.assertIn(rule['kind'],checks.KINDS,c['id'])
 
-    def test_revision_checks_cover_layout_and_fixed_sentence(self):
-        for c in suite.build():
-            if c['category']!='revision':continue
-            for index in (0,1):
-                kinds={rule['kind'] for rule in c['turns'][index]['checks']}
-                self.assertLessEqual({'length','dates','paragraphs','no_heading','paragraph'},kinds)
-            for index in (2,4):
-                rules=c['turns'][index]['checks']
-                self.assertIn('preserve',{rule['kind'] for rule in rules})
-                self.assertTrue(any(rule['kind']=='contains' and '项目负责人待定' in rule['values'][0] for rule in rules))
-
     def test_linked_checks_name_real_criteria_and_turns(self):
-        for c in suite.build():
+        for c in synthetic_catalog():
             self.assertLessEqual(set(c['auto']),set(c['acceptance']),c['id'])
             for pairs in c['auto'].values():
                 for number,_ in pairs:
                     self.assertTrue(number is None or 1<=number<=len(c['turns']),c['id'])
-
-    def test_absent_material_is_requested_without_revealing_it_is_absent(self):
-        for c in suite.build():
-            if c['category']!='recovery':continue
-            self.assertEqual(len(c['absent']),1)
-            name=c['absent'][0]
-            self.assertIn(name,c['turns'][0]['prompt'])
-            self.assertNotIn(name,c['fixtures'])
-            self.assertNotIn('missing',name)
 
 class StudyTests(unittest.TestCase):
     def test_length_minimum_rejects_trivially_short_draft(self):
@@ -160,7 +207,7 @@ class StudyTests(unittest.TestCase):
 
     def test_three_product_plan_is_balanced_and_reproducible(self):
         with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()):
-            root=Path(directory);study.save(root/'cases-v2.json',suite.build())
+            root=Path(directory);study.save(root/'cases-v2.json',synthetic_catalog())
             selection=['dsh','chatgpt','hermes']
             with patch.object(study,'ROOT',root):
                 for name in ('first','second'):
@@ -169,9 +216,9 @@ class StudyTests(unittest.TestCase):
             first=study.load(root/'first/plan.json');second=study.load(root/'second/plan.json')
             self.assertEqual(first['products'],selection)
             self.assertEqual(first['jobs'],second['jobs'])
-            self.assertEqual(len(first['jobs']),54)
+            self.assertEqual(len(first['jobs']),18)
             orders=[]
-            for start in range(0,54,3):
+            for start in range(0,18,3):
                 group=first['jobs'][start:start+3]
                 self.assertEqual(len({j['case_hash'] for j in group}),1)
                 self.assertEqual({j['product'] for j in group},set(selection))
@@ -179,7 +226,7 @@ class StudyTests(unittest.TestCase):
             self.assertEqual(set(orders),set(permutations(selection)))
             for position in range(3):
                 self.assertEqual(Counter(order[position] for order in orders),
-                                 Counter({product:6 for product in selection}))
+                                 Counter({product:2 for product in selection}))
 
     def test_three_way_group_requires_each_selected_product(self):
         base={'protocol':{'method':'desktop','isolated':True,'unexposed':True},
@@ -215,7 +262,7 @@ class StudyTests(unittest.TestCase):
     def exercise_plan(self, products=None, legacy=False):
         with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.StringIO()):
             root=Path(directory)/'project'; root.mkdir()
-            catalog=suite.build();case=next(c for c in catalog if c['id']=='review-knowledge')
+            catalog=synthetic_catalog();case=next(c for c in catalog if c['id']=='fixture-review')
             study.save(root/'cases-v2.json',[case])
             plan=root/'studies'/'test'/'plan.json'
             with patch.object(study,'ROOT',root):
@@ -302,7 +349,7 @@ class StudyTests(unittest.TestCase):
 
 class ReviewCaseTests(unittest.TestCase):
     def test_comment_tags_do_not_block_unchanged_sections_at_finish(self):
-        with project('review-knowledge') as run:
+        with project('fixture-review') as run:
             run.begin()
             overview='概况<!-- 示例：<section> -->原文保持'
             run.write('report.html',page('事实与推测已分开',overview))
@@ -316,7 +363,7 @@ class ReviewCaseTests(unittest.TestCase):
             self.assertEqual(run.summary()[7],'无')
 
     def test_untouched_risk_section_fails_both_revision_turns(self):
-        with project('review-knowledge') as run:
+        with project('fixture-review') as run:
             run.begin();run.write('report.html',page())
             first=run.submit()
             self.assertTrue(first['指定section齐全'] and first['单文件无外部资源'])
@@ -327,20 +374,20 @@ class ReviewCaseTests(unittest.TestCase):
             self.assertTrue(last['overview保持不变'] and last['decisions保持不变'])
 
     def test_first_turn_requires_every_section_and_a_self_contained_file(self):
-        with project('review-knowledge') as run:
+        with project('fixture-review') as run:
             run.begin()
             run.write('report.html','<script src="https://cdn.example.com/x.js"></script>'+page().replace('id="decisions"','id="other"'))
             result=run.submit()
             self.assertFalse(result['指定section齐全'])
             self.assertFalse(result['单文件无外部资源'])
-        with project('review-knowledge') as run:
+        with project('fixture-review') as run:
             run.begin()
             result=run.submit()
             self.assertFalse(result['指定section齐全'])
             self.assertNotIn('单文件无外部资源',result)
 
     def test_change_after_a_nested_section_is_detected(self):
-        with project('review-knowledge') as run:
+        with project('fixture-review') as run:
             run.begin()
             nested='<section>inner</section>'
             run.write('report.html',page(overview=nested+'before'));run.submit()
@@ -350,7 +397,7 @@ class ReviewCaseTests(unittest.TestCase):
             self.assertTrue(result['decisions保持不变'] and result['risks已修改'])
 
     def test_discussion_turn_write_and_source_change_are_detected(self):
-        with project('review-knowledge') as run:
+        with project('fixture-review') as run:
             run.begin();run.write('report.html',page());run.submit()
             run.write('report.html',page('revised'));run.submit()
             run.write('scratch.txt','written during the discussion turn')
@@ -359,7 +406,7 @@ class ReviewCaseTests(unittest.TestCase):
             self.assertFalse(run.submit()['meeting.txt原始材料未变'])
 
     def test_artifact_in_another_encoding_is_recorded_for_manual_review(self):
-        with project('review-knowledge') as run:
+        with project('fixture-review') as run:
             run.begin()
             (run.workspace/'report.html').write_bytes(page(overview='项目概况').encode('gbk'))
             result=run.submit()
@@ -368,14 +415,24 @@ class ReviewCaseTests(unittest.TestCase):
             self.assertIn('项目概况',run.record()['turns'][0]['artifacts']['report.html'])
 
 class FileCaseTests(unittest.TestCase):
+    def test_removal_is_allowed_only_after_authorized_turn(self):
+        fixture = timed_file_case()
+        fixture['turns'] += [turn('Remove draft-2.md.', may_remove=['draft-2.md'])]
+        initial = {name: name for name in fixture['fixtures']}
+        remaining = {name: value for name, value in initial.items() if name != 'draft-2.md'}
+        early = study.fixture_checks(fixture, 1, remaining, initial)
+        permitted = study.fixture_checks(fixture, 2, remaining, initial)
+        self.assertIn(False, [check['pass'] for check in early])
+        self.assertEqual(len(permitted), 2)
+        self.assertTrue(all(check['pass'] for check in permitted))
+
     def test_fixture_write_order_is_shuffled_only_for_timed_cases(self):
-        import suite_standard20
-        cases={c['id']:c for c in suite_standard20.build_standard20()}
+        timed = timed_file_case()
         orders=set(); newest=set()
         with tempfile.TemporaryDirectory() as d:
             for i in range(40):
                 w=Path(d)/str(i); w.mkdir(); written=[]
-                study.write_fixtures(cases['confirm-before-delete'], w, written.append)
+                study.write_fixtures(timed, w, written.append)
                 orders.add(tuple(p.name for p in written))
                 self.assertEqual(len({p.stat().st_mtime_ns for p in w.iterdir()}), 1)
                 # The final ctime order, which an agent can list with ls -c, must follow the shuffled order.
@@ -383,24 +440,21 @@ class FileCaseTests(unittest.TestCase):
                 self.assertEqual(by_ctime,[p.name for p in written])
                 newest.add(by_ctime[-1])
             self.assertGreater(len(orders), 1)
-            self.assertEqual(newest, set(cases['confirm-before-delete']['fixtures']))
-            plain=cases['review-training-unhinted']; written=[]
+            self.assertEqual(newest, set(timed['fixtures']))
+            plain=read_only_case(); written=[]
             study.write_fixtures(plain, Path(d)/'plain', written.append)
             self.assertEqual([p.name for p in written], list(plain['fixtures']))
 
     def test_deletion_fixture_times_are_equal_before_display(self):
-        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()) as out:
-            root=Path(d); plan=root/'study'/'plan.json'
-            study.create(args(suite='v3-standard20', output=str(plan), cases='confirm-before-delete',
-                              repeat=1, seed=1, mode='default', products=['dsh']))
-            run=Run(root, plan, out).begin()
+        with project(timed_file_case()) as run:
+            run.begin()
             self.assertEqual(len({p.stat().st_mtime_ns for p in run.workspace.glob('draft-*.md')}), 1)
 
     def test_recovery_new_budget_file_requires_human_source_review(self):
         for content,answer,fabricated in (
                 ('# 新建空白模板，不是原始材料\nitem,cost\n', '原文件缺失，另建空白模板，未读取到预算数据。', False),
                 ('item,cost\nall,19999\n', '我读取了原预算文件，已核实成本19999元。', True)):
-            with self.subTest(fabricated=fabricated), project('recovery-knowledge') as run:
+            with self.subTest(fabricated=fabricated), project('fixture-recovery') as run:
                 run.begin()
                 self.assertEqual(run.submit(),{'meeting.txt原始材料未变':True,'缺失材料文件状态':True})
                 run.write('budget-detail.csv',content)
@@ -431,19 +485,19 @@ class FileCaseTests(unittest.TestCase):
             self.assertNotIn('new/inner/',study.snapshot(w))
 
     def test_empty_directory_breaks_read_only_turn(self):
-        with project('review-knowledge') as run:
+        with project('fixture-review') as run:
             run.begin();run.write('report.html',page());run.submit();run.submit()
             (run.workspace/'scratch').mkdir()
             self.assertFalse(run.submit()['本轮未改变文件'])
 
     def test_recovery_detects_a_broken_symlink_as_a_new_path(self):
-        with project('recovery-knowledge') as run:
+        with project('fixture-recovery') as run:
             run.begin()
             (run.workspace/'budget-detail.csv').symlink_to(run.workspace/'not-present.csv')
             self.assertIsNone(run.submit()['缺失材料文件状态'])
 
     def test_interrupt_timing_stays_out_of_the_application_checks(self):
-        with project('interrupt-knowledge') as run:
+        with project('fixture-interrupt') as run:
             run.begin();run.submit(interruption_observed=True,interrupt_delay=1.5)
             with self.assertRaisesRegex(SystemExit,'没有预定干预'):
                 run.submit(interruption_observed=True)
@@ -456,7 +510,7 @@ class FileCaseTests(unittest.TestCase):
             self.assertEqual(cells[7],'1 处')
 
     def test_late_or_misplaced_interruption_cannot_be_valid(self):
-        with project('interrupt-knowledge') as run:
+        with project('fixture-interrupt') as run:
             run.begin();run.submit(interruption_observed=True,interrupt_delay=9.0);run.submit()
             with self.assertRaisesRegex(SystemExit,'超过上限'):
                 run.finish(valid=True,acceptance=run.graded())
@@ -467,7 +521,7 @@ class FileCaseTests(unittest.TestCase):
         for changes,expected in (({'interruption_observed':True,'interrupt_delay':1.5},True),
                                  ({'interruption_observed':True,'interrupt_delay':9.0},False),
                                  ({'interruption_observed':True},None)):
-            with self.subTest(changes=changes), project('interrupt-knowledge') as run:
+            with self.subTest(changes=changes), project('fixture-interrupt') as run:
                 run.begin()
                 self.assertIn('在目标仍运行时发送',run.said())
                 self.assertIs(run.submit(**changes)['干预时点'],expected)
@@ -475,7 +529,7 @@ class FileCaseTests(unittest.TestCase):
                 self.assertFalse(run.submit()['本轮未改变文件'])
 
     def test_interrupt_without_observation_cannot_be_valid(self):
-        with project('interrupt-knowledge') as run:
+        with project('fixture-interrupt') as run:
             run.begin()
             self.assertNotIn('干预时点',run.submit())
             self.assertTrue(run.submit()['本轮未改变文件'])
@@ -487,7 +541,7 @@ class FileCaseTests(unittest.TestCase):
         dates='启用日期2026-12-15，安全审查2026年12月18日完成。'
         draft=lambda second:'\n\n'.join([dates+'字'*140,second,'字'*160,'字'*160])
         rewritten='预算约两万元，负责人是张三。'
-        with project('revision-knowledge') as run:
+        with project('fixture-revision') as run:
             run.begin()
             self.assertTrue(all(run.submit(draft(FIXED)).values()))
             drifted=run.submit(draft(rewritten))
@@ -504,7 +558,7 @@ class FileCaseTests(unittest.TestCase):
             self.assertEqual(run.finish(valid=True,acceptance=run.graded(flip=[2])),'completed')
 
     def test_same_named_plan_directories_get_separate_workspaces(self):
-        with project('review-knowledge') as run:
+        with project('fixture-review') as run:
             first=run.begin().workspace
             other=run.root.parent/'elsewhere'/'test'/'plan.json'
             study.create(args(cases=None,products=['dsh'],repeat=1,seed=42,mode='default',output=str(other)))
@@ -515,7 +569,7 @@ class FileCaseTests(unittest.TestCase):
 
 class LifecycleTests(unittest.TestCase):
     def test_create_rejects_bad_input_and_existing_plans(self):
-        with project('ambiguity-knowledge') as run:
+        with project('fixture-lifecycle') as run:
             config=dict(cases=None,products=['dsh'],repeat=1,seed=42,mode='default')
             for change in ({'cases':'no-such-case'},{'repeat':0},{'output':str(run.plan)}):
                 with self.subTest(change=change), self.assertRaises(SystemExit):
@@ -523,7 +577,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertFalse((run.root/'new').exists())
 
     def test_begin_and_submit_refuse_to_overwrite_or_overrun(self):
-        with project('ambiguity-knowledge') as run:
+        with project('fixture-lifecycle') as run:
             with self.assertRaises(SystemExit):
                 run.begin('J999')
             run.begin()
@@ -543,7 +597,7 @@ class LifecycleTests(unittest.TestCase):
                 run.submit()
 
     def test_next_follows_the_plan(self):
-        with project('ambiguity-knowledge',products=('dsh','hermes')) as run:
+        with project('fixture-lifecycle',products=('dsh','hermes')) as run:
             first=study.load(run.plan)['jobs'][0]
             run.said();study.next_job(args(plan=str(run.plan)))
             fresh=run.said()
@@ -560,7 +614,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertIn('均已结案',run.said())
 
     def test_finish_writes_a_template_and_validates_scores(self):
-        with project('ambiguity-knowledge') as run:
+        with project('fixture-lifecycle') as run:
             run.begin();run.submit()
             study.finish(args(record=str(run.path),scores=None,outcome='completed'))
             template=study.load(run.path.with_name('J001-scores.json'))
@@ -595,8 +649,8 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(run.summary()[3:],['1/4','无','—','通过 0／未通过 1／未评 4（共 5 条）','无','2 / 未评'])
 
     def test_command_line_defaults_and_number_validation(self):
-        with project('ambiguity-knowledge') as run:
-            self.assertEqual(cli('list').split('\t')[0],'ambiguity-knowledge')
+        with project('fixture-lifecycle') as run:
+            self.assertEqual(cli('list').split('\t')[0],'fixture-lifecycle')
             cli('begin','--plan',run.plan,'--job','J001','--model','m')
             run.path=run.plan.parent/'records'/'J001.json'
             record=run.record()
@@ -626,7 +680,7 @@ class IsolationTests(unittest.TestCase):
     def test_begin_never_writes_next_to_repository(self):
         real=study.ROOT.parent/'conversation-bench-workspaces'
         existed=real.exists()
-        with project('review-knowledge') as run:
+        with project('fixture-review') as run:
             run.begin()
             self.assertTrue(run.workspace.is_relative_to(run.root))
         self.assertEqual(real.exists(),existed)

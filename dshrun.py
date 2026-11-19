@@ -26,8 +26,8 @@ LIMITATIONS = [
 def prepare(args):
     binary = str(Path(args.dsh).resolve())
     version = subprocess.run([binary, '--version'], capture_output=True, text=True, check=True, timeout=20).stdout.strip()
-    suite = getattr(args, 'suite', 'v3-standard20')
-    cases = study.load(common.ROOT/f'cases-{suite}.json')
+    suite = getattr(args, 'suite', study.DEFAULT_SUITE)
+    cases = study.load_catalog(suite, common.ROOT)
     if args.cases:
         wanted = args.cases.split(',')
         if set(wanted)-{c['id'] for c in cases}: raise ValueError('未知用例')
@@ -92,7 +92,7 @@ def execute(folder):
                     started=time.monotonic()
                     result=DshDriver(config).perform(home,workspace,r['thread_id'],spec['prompt'],number>1,raw/'events.jsonl')
                     study.save(raw/'result.json',result);(raw/'answer.txt').write_text(result['answer'])
-                    files,artifacts,limits=common.snapshot(workspace)
+                    files,artifacts,limits=common.snapshot(workspace, case.get('snapshot_artifacts', ()))
                     turn=dict(number=number,prompt=spec['prompt'],answer=result['answer'],files=files,artifacts=artifacts,
                               snapshot_limits=limits,execution_evidence=[dict(kind='tool',text=__import__('json').dumps(e,ensure_ascii=False)) for e in result['events'] if 'tool' in e.get('type','')],
                               usage=[e for e in result['events'] if 'usage' in e.get('type','')],notes='',metrics=dict(elapsed=time.monotonic()-started),
@@ -122,7 +122,7 @@ def main():
     a=s.add_parser('prepare');a.add_argument('--output',required=True);a.add_argument('--model',required=True)
     a.add_argument('--provider',default='deepseek-official');a.add_argument('--effort',default='high')
     a.add_argument('--dsh',default=DSH_BIN);a.add_argument('--timeout',type=common.positive,default=600);a.add_argument('--cases')
-    a.add_argument('--suite',choices=['v3-standard20'],default='v3-standard20')
+    a.add_argument('--suite',choices=study.SUITES,default=study.DEFAULT_SUITE)
     a.add_argument('--profile-patch',help='Non-secret provider overlay, frozen into the plan; use apiKeyEnv for credentials')
     for name in ('run','report','export'): s.add_parser(name).add_argument('--study',required=True)
     args=p.parse_args()

@@ -1,0 +1,12 @@
+在工作区 candidate/ 交付浏览器 3D 天体沙盒。使用原生 HTML/CSS/JS，可使用随产物提供的本地库，无需构建或后端。以稳定、清晰、真实的三维交互为目标。实现牛顿 n-body 引力、半径碰撞合并、质量守恒和近似动量守恒；近距离需有数值稳定措施。可添加和删除天体，设定质量、半径、三维位置和速度，控制相机旋转/平移/缩放，暂停、重置，显示轨迹和随质量变化的曲率。至少实现一种清楚说明的相对论启发式视觉效果。20 个天体可连续运行。README 解释近似、边界和启动方法。
+
+页面默认暂停。可见 WebGL 画布用 data-testid="gravity-canvas"，暂停/继续按钮用 gravity-play，重置用 gravity-reset，轨迹开关和曲率开关用 gravity-trails、gravity-curvature。三个控制都要连接实际画面和模拟状态。
+
+通过 window.benchGravity 暴露与实际画面共用的确定性控制接口：
+- reset() 恢复默认场景并暂停。clear() 移除全部天体、清空相关状态并暂停。
+- setGravity(g) 设置非负全局引力系数。addBody({mass,radius,position:[x,y,z],velocity:[vx,vy,vz]}) 返回非空字符串 id。removeBody(id) 删除该对象。
+- step(dt) 在暂停状态也同步推进 dt 秒，可以内部子步进，并更新画面。页面正常播放与该接口使用同一物理引擎。
+- getState() 返回可 JSON 序列化的 {paused, time, bodies:[{id,mass,radius,position,velocity}], camera:{position:[x,y,z]}, overlays:{trails,curvature}}。轨迹和曲率为布尔值。
+- orbit(yaw,pitch) 以弧度调用与鼠标交互等价的相机旋转，更新实际场景。画布可在暂停时重绘。
+
+验收会跑多组固定初值，核对可观察画面、相机、引力方向与距离关系、合并前后的质量与动量、暂停与重置，以及 20 体长步进时是否维持有限数值。视觉和交互由单独评审打分。

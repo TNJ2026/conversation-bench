@@ -2,7 +2,7 @@
 
 `codexrun.py` 通过本机 `codex exec` 发起真实模型请求，通过会话 ID `resume` 继续同题多轮。支持指定多个模型及不同推理强度、重复次数、单轮超时和案例子集。它与人工桌面入口 `study.py` 分开，不把 CLI 结果标为桌面结果。
 
-题库为常规20题（`v3-standard20`），共45轮提示，全部可顺序执行。若题目含运行中中断，会登记为 `unsupported`，不会通过杀进程伪造“遵守停止指令”。
+默认题库为 `v3-combined8`，共 8 题、19 轮，全部可顺序执行。若题目含运行中中断，会登记为 `unsupported`，不会通过杀进程伪造“遵守停止指令”。
 
 ## 准备与执行
 
@@ -25,7 +25,7 @@ python3 codexrun.py run --study studies/codex-core-1
 # 先跑一个两轮用例确认模型权限、事件格式和会话恢复。
 python3 codexrun.py prepare \
   --model 'MODEL_A@high' --model 'MODEL_A@low' \
-  --cases requirements-replace --timeout 600 \
+  --cases adv-approved-picklist --timeout 600 \
   --output studies/codex-preflight-1
 python3 codexrun.py run --study studies/codex-preflight-1
 

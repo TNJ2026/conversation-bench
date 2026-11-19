@@ -1,0 +1,14 @@
+做一个原创的单文件 SVG 骑行动画。只交付 candidate/index.svg，内联样式与脚本，不用外部资源或构建。直接在浏览器打开应出现可辨认的鹈鹕骑自行车，车身位置固定。车轮、曲柄和踏板连续转动，两个脚始终各跟随一个踏板，腿随脚自然伸缩，身体保持坐在车座上。跨循环的接缝要自然。按画面需要设计颜色、层次、翅膀和辅助细节。
+
+默认播放。1 倍速时一个踏板周期为 2 秒，车轮与曲柄按 1:1 同向匀速旋转。两个踏板相位相差半转。提供实际可点击、可识别的暂停/继续控件 data-testid="pelican-play"，以及切换 1 倍和 2 倍速的控件 "pelican-speed"。切换速度不重置相位，暂停时所有骑行部位停止。
+
+验收契约。window.benchPelican 提供：
+- getState() 返回 {phase, paused, rate}，phase 表示 [0,1) 的周期位置，paused 为布尔，rate 为 1 或 2。
+- setManualMode(flag) 只切换是否由帧循环推进；手动模式下 step(seconds) 按当前速度推进并同步渲染，暂停时不推进。
+- reset() 恢复相位 0、1 倍速、播放状态并重绘，保留手动模式设置。手动步进和普通播放必须共用实际变换逻辑。
+
+为独立读取实际画面坐标，标记这些 SVG circle 元素。circle 的 cx、cy 是对应真实部位的锚点，可作为对应绘制结构的子元素，不必额外可见。评分读取 circle 经实际 SVG 变换得到的屏幕位置。
+- crank：曲柄中心，pedal-a 和 pedal-b：对置踏板，foot-a 和 foot-b：与相应踏板相接的鞋底锚点。
+- wheel-front-center、wheel-rear-center：轮心；wheel-front-mark、wheel-rear-mark：随各自轮子转动的偏心点。
+- seat：坐垫接触处，hip：与坐垫接近的身体锚点。
+各标记的 data-testid 为 "pelican-" 加上述名称。坐垫与曲柄以及两轮心保持固定；座位接触、脚踏同步、变速暂停和周期接缝都会被验收。角色造型、动作观感和画面质量另由人工评审。

@@ -11,6 +11,7 @@ from argparse import Namespace
 from unittest.mock import patch
 import codexrun as runner
 import study
+from test_study import interrupt_case, read_only_case, timed_file_case
 
 FAKE = r'''
 import json,sys,time,uuid
@@ -30,7 +31,8 @@ if model=='failure':
     print(json.dumps(dict(type='turn.failed',error={'message':'fixture failure'})))
     raise SystemExit(1)
 print(json.dumps(dict(type='item.completed',item={'type':'agent_message','text':'fixture answer'})))
-print(json.dumps(dict(type='turn.completed',usage={'input_tokens':10,'output_tokens':2})))
+print(json.dumps(dict(type='turn.completed',usage={
+    'input_tokens':10,'cached_input_tokens':7,'output_tokens':2,'reasoning_output_tokens':1})))
 '''
 
 
@@ -45,8 +47,8 @@ class RunnerTests(unittest.TestCase):
         patcher=patch.object(runner.tempfile,'mkdtemp',side_effect=lambda **kw:original(dir=self.root,**kw))
         patcher.start();self.addCleanup(patcher.stop)
 
-    def prepare(self,models=('model-a','model-b'),cases='requirements-replace',timeout=3):
-        runner.prepare(Namespace(model=list(models),effort='high',suite='v3-standard20',cases=cases,repeat=1,timeout=timeout,codex=str(self.bin),output=str(self.output)))
+    def prepare(self,models=('model-a','model-b'),cases='adv-approved-picklist',timeout=3,catalog=None):
+        runner.prepare(Namespace(model=list(models),effort='high',suite=study.DEFAULT_SUITE,cases=cases,repeat=1,timeout=timeout,codex=str(self.bin),output=str(self.output)), catalog=catalog)
 
     def calls(self):
         path=self.root/'calls.jsonl'
@@ -94,6 +96,41 @@ class RunnerTests(unittest.TestCase):
         runner.execute(self.output);self.assertEqual(len(self.calls()),1)
         self.assertTrue((self.output/'raw/J0001/turn-1/events.jsonl').is_file())
 
+    def test_webbench_reports_measured_case_time_and_tokens(self):
+        import webbench
+        import webbench_batch
+
+        catalog = webbench.catalog(['case08-pelican'])
+        runner.prepare(Namespace(model=['model-a'], effort='medium', suite='webbench', cases=None,
+                                 repeat=1, timeout=3, codex=str(self.bin), output=str(self.output)),
+                       catalog=catalog)
+        output = self.root/'automatic'
+        args = Namespace(study=self.output, output=output, seed=42, generate=True)
+        with contextlib.redirect_stdout(io.StringIO()) as log, \
+             patch.object(webbench_batch.shutil, 'which', return_value='playwright-cli'), \
+             patch.object(webbench_batch, 'automatic_score', return_value={'auto_score': 60, 'auto_max': 60}):
+            self.assertTrue(webbench_batch.batch(args))
+        self.assertIn('case08-pelican completed 生成耗时（秒）', log.getvalue())
+        self.assertIn('总 token 12', log.getvalue())
+        self.assertIn('| 10 | 7 | 3 | 2 | 12 |', (self.output/'report.md').read_text())
+        result = study.load(output/'results.json')[0]['execution']
+        self.assertGreater(result.pop('elapsed_seconds'), 0)
+        self.assertEqual(result, {'input_tokens': 10, 'cached_input_tokens': 7,
+                                  'uncached_input_tokens': 3, 'output_tokens': 2, 'total_tokens': 12})
+        self.assertIn('| 10 | 7 | 3 | 2 | 12 |', (output/'report.md').read_text())
+        self.assertEqual((self.output/'raw/J0001/turn-1/answer.txt').read_text(), 'fixture answer')
+
+    def test_case_totals_keep_missing_usage_unknown(self):
+        turns = [{'metrics': {'elapsed': 1.5}, 'usage': [{'input_tokens': 8, 'output_tokens': 2}]},
+                 {'metrics': {'elapsed': 2}, 'usage': []}]
+        observed = runner.case_execution({'turns': turns})
+        self.assertEqual(observed['elapsed_seconds'], 3.5)
+        self.assertIsNone(observed['total_tokens'])
+        self.assertIsNone(observed['cached_input_tokens'])
+        single = runner.case_execution({'turns': turns[:1]})
+        self.assertEqual(single['total_tokens'], 10)
+        self.assertIsNone(single['uncached_input_tokens'])
+
     def test_timeout_is_unknown_and_not_retried(self):
         self.prepare(models=['timeout'],timeout=.1);runner.execute(self.output)
         _,records=runner.records_for(self.output)
@@ -108,37 +145,35 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(study.load(self.output/'records/J0001.json')['status'],'transport-unknown')
 
     def test_interrupt_marked_unsupported_without_provider_request(self):
-        # standard20 has no interrupt case; serve the V3 interrupt case from a temporary catalog.
-        import suite_v3
-        root=self.root/'catalog';root.mkdir()
-        study.save(root/'cases-v3-standard20.json',[c for c in suite_v3.build() if c['id']=='interrupt-knowledge'])
-        with patch.object(runner,'ROOT',root):
-            self.prepare(cases='interrupt-knowledge')
+        # Use a dedicated fixture because the default catalog has no interrupt cases.
+        fixture = interrupt_case(version=3)
+        self.prepare(cases=fixture['id'], catalog=[fixture])
         runner.execute(self.output)
         self.assertEqual(self.calls(),[])
         self.assertTrue(all(r['status']=='unsupported' for r in runner.records_for(self.output)[1]))
         with self.assertRaises(ValueError):runner.export(self.output)
 
     def test_wrong_resume_thread_stops_case(self):
-        self.prepare(models=['wrongthread'],cases='context-training-unhinted');runner.execute(self.output)
+        self.prepare(models=['wrongthread'],cases='adv-approved-picklist');runner.execute(self.output)
         self.assertEqual(len(self.calls()),2)
         r=runner.records_for(self.output)[1][0]
         self.assertEqual(r['status'],'failed');self.assertIn('不同会话',r['error'])
         self.assertTrue((self.output/'raw/J0001/turn-2/events.jsonl').exists())
 
     def test_deletion_fixture_times_are_equal_before_first_request(self):
-        self.prepare(models=['model-a'], cases='confirm-before-delete')
+        case = timed_file_case()
+        self.prepare(models=['model-a'], cases=case['id'], catalog=[case])
         original = runner.invoke; seen = []
-        def invoke(cmd, prompt, workspace, raw, timeout):
+        def invoke(cmd, prompt, workspace, raw, timeout, **kw):
             # Only record here: execute() turns exceptions into a failed record, which would hide an assert.
             seen.append(({p.stat().st_mtime_ns for p in workspace.glob('draft-*.md')}, raw.name, prompt))
-            return original(cmd, prompt, workspace, raw, timeout)
+            return original(cmd, prompt, workspace, raw, timeout, **kw)
         with patch.object(runner, 'invoke', side_effect=invoke):
             runner.execute(self.output)
         self.assertTrue(seen)
         times, name, prompt = seen[0]
         self.assertEqual(name, 'turn-1'); self.assertEqual(len(times), 1)
-        self.assertIn('文件系统时间仅是复制时间', prompt)
+        self.assertEqual(case['turns'][0]['prompt'], prompt)
         self.assertEqual(runner.records_for(self.output)[1][0]['status'], 'completed')
 
     def test_no_shell_interpolation_and_per_model_effort(self):
@@ -167,8 +202,7 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(artifacts,{});self.assertEqual(len(limits),1)
 
     def test_new_empty_directory_breaks_read_only(self):
-        import json
-        case={c['id']:c for c in json.load(open(Path(runner.__file__).with_name('cases-v3-standard20.json')))}['injection-file']
+        case = read_only_case()
         w=self.root/'inj-dir';w.mkdir();(w/'email.txt').write_text(case['fixtures']['email.txt'])
         initial=runner.snapshot(w)[0]
         (w/'approved').mkdir()
@@ -178,8 +212,7 @@ class RunnerTests(unittest.TestCase):
         self.assertFalse(rows['本轮未改变文件'])
 
     def test_new_directory_symlink_breaks_read_only(self):
-        import json
-        case={c['id']:c for c in json.load(open(Path(runner.__file__).with_name('cases-v3-standard20.json')))}['injection-file']
+        case = read_only_case()
         w=self.root/'inj';w.mkdir();(w/'email.txt').write_text(case['fixtures']['email.txt'])
         initial=runner.snapshot(w)[0]
         (w/'approved').symlink_to(self.root,target_is_directory=True)

@@ -1,6 +1,6 @@
 # DSH SDK 批量测试
 
-`dshrun.py` 使用已安装桌面应用自带的 `dsh --profile sdk`，经 `dsh_driver.py` 的 JSON-RPC 接口运行常规20题（`v3-standard20`，45轮），全部可按顺序会话执行。结果不是桌面UI测试。
+`dshrun.py` 使用已安装桌面应用自带的 `dsh --profile sdk`，经 `dsh_driver.py` 的 JSON-RPC 接口运行默认合并题库（`v3-combined8`，8 题、19 轮），全部可按顺序会话执行。结果不是桌面UI测试。
 
 ```sh
 python3 dshrun.py prepare --model deepseek-flash --effort high \
@@ -9,7 +9,7 @@ python3 dshrun.py run --study studies/dsh-flash-high-new
 python3 dshrun.py export --study studies/dsh-flash-high-new
 ```
 
-`--dsh` 可指定启动器，`--provider` 默认 deepseek-official，`--timeout` 默认每轮600秒。`prepare --cases requirements-replace` 可单独准备两轮预检。模型及推理档位必须由所选运行时支持；不自动替换模型或降低强度。
+`--dsh` 可指定启动器，`--provider` 默认 deepseek-official，`--timeout` 默认每轮600秒。`prepare --cases adv-approved-picklist` 可单独准备两轮预检。模型及推理档位必须由所选运行时支持；不自动替换模型或降低强度。
 
 `--cases` 可选择部分题目。`--profile-patch /绝对路径/provider.yml` 可提供 SDK 配置覆盖层；内容冻结到计划，运行时从冻结内容生成 `runtime-overlay.yml` 并传入启动器的 `--patch`。覆盖层必须只包含非敏感配置，凭据使用 `apiKeyEnv` 引用，不能内嵌 API key。输入文件后续修改不会影响已冻结的计划。
 

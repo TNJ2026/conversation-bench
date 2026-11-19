@@ -2,6 +2,7 @@
 """Batch Codex CLI conversations; explicit model arms, raw evidence, no automatic grading."""
 import argparse
 import contextlib
+import sys
 import fcntl
 import hashlib
 import json
@@ -19,6 +20,17 @@ import review_v3
 import study
 
 ROOT = Path(__file__).resolve().parent
+METHOD = 'codex-cli'
+TITLE = 'Codex CLI 批量测试'
+WORKSPACE_PREFIX = 'codex-bench-'
+EXECUTION_COLUMNS = (
+    ('elapsed_seconds', '生成耗时（秒）'),
+    ('input_tokens', '输入 token'),
+    ('cached_input_tokens', '缓存输入 token'),
+    ('uncached_input_tokens', '未缓存输入 token'),
+    ('output_tokens', '输出 token'),
+    ('total_tokens', '总 token'),
+)
 LIMITATIONS = [
     'CLI测试，不代表桌面UI体验；中断用例不支持。',
     '独立新会话和工作区属于逻辑分离，不是保密读取隔离；workspace-write不禁止读取所有其他路径。',
@@ -35,6 +47,48 @@ def positive(value):
     return number
 
 
+def case_execution(record):
+    """Sum observed CLI turns. Each invocation requests exactly one turn."""
+    turns = record.get('turns', []) if record else []
+    durations = [turn.get('metrics', {}).get('elapsed') for turn in turns]
+    elapsed = sum(durations) if durations and all(
+        type(value) in (int, float) and math.isfinite(value) and value >= 0 for value in durations
+    ) else None
+    payloads = [turn.get('usage') for turn in turns]
+    usage = [payload[0] for payload in payloads if isinstance(payload, list) and len(payload) == 1
+             and isinstance(payload[0], dict)]
+
+    def tokens(key):
+        values = [event.get(key) for event in usage]
+        if values and len(values) == len(turns) and all(type(value) is int and value >= 0 for value in values):
+            return sum(values)
+        return None
+
+    input_tokens = tokens('input_tokens')
+    cached = tokens('cached_input_tokens')
+    output_tokens = tokens('output_tokens')
+    if cached is not None and (input_tokens is None or any(
+        event['cached_input_tokens'] > event['input_tokens'] for event in usage
+    )):
+        cached = None
+    return {
+        'elapsed_seconds': elapsed,
+        'input_tokens': input_tokens,
+        'cached_input_tokens': cached,
+        'uncached_input_tokens': input_tokens-cached if input_tokens is not None and cached is not None else None,
+        'output_tokens': output_tokens,
+        'total_tokens': input_tokens+output_tokens if input_tokens is not None and output_tokens is not None else None,
+    }
+
+
+def execution_cells(execution):
+    cells = []
+    for key, _ in EXECUTION_COLUMNS:
+        value = execution.get(key)
+        cells.append('—' if value is None else f'{value:.2f}' if key == 'elapsed_seconds' else f'{value:,}')
+    return cells
+
+
 def arm_specs(values, effort):
     arms = []
     for value in values:
@@ -49,12 +103,13 @@ def arm_specs(values, effort):
     return arms
 
 
-def prepare(args):
+def prepare(args, catalog=None):
     arms = arm_specs(args.model, args.effort)
-    catalog = study.load(ROOT/f'cases-{args.suite}.json')
+    if catalog is None:
+        catalog = study.load_catalog(args.suite, ROOT)
     requested = args.cases.split(',') if args.cases else None
     if requested and (len(set(requested)) != len(requested) or set(requested)-{c['id'] for c in catalog}):
-        raise ValueError('案例ID重复或不在所选套件内；完整集请选 --suite v3')
+        raise ValueError('案例ID重复或不在所选套件内')
     cases = [c for c in catalog if requested is None or c['id'] in requested]
     if args.repeat < 1: raise ValueError('repeat必须为正整数')
     destination = Path(args.output).expanduser().resolve()
@@ -112,13 +167,17 @@ def parse_events(path):
                 malformed_lines=malformed,usage=usage,execution_evidence=evidence)
 
 
-def invoke(cmd, prompt, workspace, raw, timeout):
+def child_env():
+    return None  # inherit the caller's environment unchanged
+
+
+def invoke(cmd, prompt, workspace, raw, timeout, parse=None, env=None):
     raw.mkdir(parents=True,exist_ok=False)
     (raw/'prompt.txt').write_text(prompt,encoding='utf-8')
     study.save(raw/'command.json',cmd)
     started = time.monotonic(); timed_out = False
     with (raw/'events.jsonl').open('wb') as out, (raw/'stderr.log').open('wb') as err:
-        process = subprocess.Popen(cmd,cwd=workspace,stdin=subprocess.PIPE,stdout=out,stderr=err,start_new_session=True)
+        process = subprocess.Popen(cmd,cwd=workspace,stdin=subprocess.PIPE,stdout=out,stderr=err,start_new_session=True,env=env)
         try:
             process.communicate(prompt.encode(),timeout=timeout)
         except (subprocess.TimeoutExpired,KeyboardInterrupt) as error:
@@ -129,15 +188,20 @@ def invoke(cmd, prompt, workspace, raw, timeout):
                 process.communicate()
             if isinstance(error,KeyboardInterrupt): raise
             timed_out = True
-    result = parse_events(raw/'events.jsonl')
+    result = (parse or parse_events)(raw/'events.jsonl')
     result.update(returncode=process.returncode,timeout=timed_out,elapsed=time.monotonic()-started)
     return result
 
 
-def snapshot(workspace):
+def snapshot(workspace, text_files=(), source=False):
     files = {}; artifacts = {}; limits = []
     # Bounded, no symlink traversal. Record omissions rather than silently treating snapshots as complete.
     for base,dirs,names in os.walk(workspace,followlinks=False):
+        if source:
+            excluded = {'.git', '.next', 'node_modules'}
+            if Path(base).relative_to(workspace).parts[:1] != ('candidate',):
+                excluded.add('vendor')
+            dirs[:] = [d for d in dirs if d not in excluded]
         for d in dirs:
             p = Path(base)/d
             # The link itself is a workspace change; its target is never read.
@@ -153,7 +217,7 @@ def snapshot(workspace):
             if len(files)>=200 or p.stat().st_size>2_000_000:
                 limits.append(relative+': snapshot limit'); continue
             data = p.read_bytes(); files[relative]=hashlib.sha256(data).hexdigest()
-            if p.suffix.lower() in ('.txt','.md','.html','.csv','.json'):
+            if (source and p.suffix.lower() in {'.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.css', '.svg'}) or relative in text_files or p.suffix.lower() in ('.txt','.md','.html','.csv','.json'):
                 try: artifacts[relative]=data.decode('utf-8')
                 except UnicodeDecodeError: limits.append(relative+': not UTF-8')
     return files,artifacts,limits
@@ -171,18 +235,23 @@ def turn_checks(case, spec, answer, earlier, artifacts, files, initial, limits):
         add('指定section齐全',all(checks.section(page,x) is not None for x in spec['sections']),'静态结构，不验证预览')
         linked=checks.linked_resources(page)
         add('单文件无外部资源',bool(page) and not linked,'静态资源扫描：'+str(linked)+'；非浏览器验证')
-    if case['category']=='review' and earlier:
+    if spec.get('keeps_sections') and earlier:
         page=artifacts.get('report.html',''); original=earlier[0]['artifacts'].get('report.html','')
-        for name in ('overview','decisions'):
+        for name in spec['keeps_sections']:
             before,after=checks.section(original,name),checks.section(page,name)
             add(name+'保持不变',bool(before and before==after),'与首轮section原始HTML比较')
+    previous = earlier[-1]['files'] if earlier else initial
+    result.extend(study.artifact_checks(spec,files,previous,artifacts,limits))
     for row in result:
         if 'pass_' in row: row['pass']=row.pop('pass_')
     return result
 
 
-def execute(folder):
+def execute(folder, backend=None):
+    """Run a frozen plan. backend supplies METHOD, WORKSPACE_PREFIX, command, parse_events and child_env."""
+    backend = backend or sys.modules[__name__]
     folder=Path(folder).resolve(); plan=study.load(folder/'plan.json')
+    webbench = plan.get('suite') == 'webbench'
     if study.digest(plan)!=study.load(folder/'plan-binding.json')['sha256']:
         raise ValueError('计划已修改；请为新配置创建新计划，避免混合结果')
     with (folder/'.run.lock').open('a') as lock:
@@ -201,23 +270,24 @@ def execute(folder):
                 continue
             case=job['case']; arm=job['arm']
             record=dict(job=job['id'],product=arm['id'],config=arm,case=case,case_hash=job['case_hash'],repeat=job['repeat'],
-                        status='running',created=study.stamp(),turns=[],protocol=dict(method='codex-cli',isolated=False,unexposed=None),
+                        status='running',created=study.stamp(),turns=[],protocol=dict(method=backend.METHOD,isolated=False,unexposed=None),
                         valid=None,initial_files={},workspace=None,thread_id=None)
             if case['category']=='interrupt':
                 record.update(status='unsupported',error='CLI批量运行器未实现真实运行中指令干预；不通过杀进程模拟')
                 study.save(rp,record); print(job['id'],case['id'],'unsupported',flush=True); continue
             # Outside repository and report directory, with a separate directory per model/case/repeat.
-            workspace=Path(tempfile.mkdtemp(prefix='codex-bench-')).resolve()
+            workspace=Path(tempfile.mkdtemp(prefix=backend.WORKSPACE_PREFIX)).resolve()
             record['workspace']=str(workspace)
             study.save(rp,record)
             try:
                 def inside(p):
                     if p.is_absolute() and workspace not in p.resolve().parents: raise ValueError('非法材料路径')
                 study.write_fixtures(case, workspace, inside)
-                record['initial_files']=snapshot(workspace)[0];study.save(rp,record)
+                record['initial_files']=snapshot(workspace, source=case.get('snapshot_source', False))[0];study.save(rp,record)
                 for number,spec in enumerate(case['turns'],1):
                     raw=folder/'raw'/job['id']/f'turn-{number}'
-                    result=invoke(command(plan,arm,record['thread_id']),spec['prompt'],workspace,raw,plan['timeout'])
+                    result=invoke(backend.command(plan,arm,record['thread_id']),spec['prompt'],workspace,raw,plan['timeout'],
+                                  parse=backend.parse_events,env=backend.child_env())
                     thread=result['thread'] or record['thread_id']
                     thread_error = None
                     if result['thread'] and record['thread_id'] and result['thread']!=record['thread_id']:
@@ -225,12 +295,13 @@ def execute(folder):
                     if thread is not None and (not isinstance(thread,str) or not thread.strip() or thread.startswith('-')):
                         thread_error = 'CLI返回无效会话ID'
                     if not thread_error: record['thread_id']=thread
-                    files,artifacts,limits=snapshot(workspace)
+                    files,artifacts,limits=snapshot(workspace, case.get('snapshot_artifacts', ()), source=case.get('snapshot_source', False))
                     turn=dict(number=number,prompt=spec['prompt'],answer=result['answer'],files=files,artifacts=artifacts,
                               snapshot_limits=limits,execution_evidence=result['execution_evidence'],usage=result['usage'],
                               notes='快照限制：'+str(limits) if limits else '',
                               metrics={'elapsed':result['elapsed']},interruption_observed=False,
                               transport={k:result[k] for k in ('returncode','timeout','completed','failed','malformed_lines')})
+                    if result.get('model'): turn['reported_model']=result['model']
                     turn['checks']=turn_checks(case,spec,result['answer'],record['turns'],artifacts,files,record['initial_files'],limits)
                     record['turns'].append(turn)
                     (raw/'answer.txt').write_text(result['answer'],encoding='utf-8')
@@ -239,7 +310,8 @@ def execute(folder):
                     if not good:
                         record.update(status='transport-unknown' if result['timeout'] else 'failed',error=thread_error or '本轮未取得完整可靠响应；原始输出已保留，不自动重试')
                     study.save(rp,record)
-                    print(job['id'],arm['model'],case['id'],f'{number}/{len(case["turns"])}',record['status'],flush=True)
+                    if not webbench or (good and number < len(case['turns'])):
+                        print(job['id'],arm['model'],case['id'],f'{number}/{len(case["turns"])}',record['status'],flush=True)
                     if not good: break
                 if record['status']=='running': record['status']='completed'
             except KeyboardInterrupt:
@@ -248,7 +320,12 @@ def execute(folder):
             except Exception as error:
                 record.update(status='failed',error=f'{type(error).__name__}: {error}')
             record['finished']=study.stamp();study.save(rp,record)
-    report(folder)
+            if webbench:
+                execution = case_execution(record)
+                measurements = '，'.join(f'{label} {value}' for (_, label), value in
+                                         zip(EXECUTION_COLUMNS, execution_cells(execution)))
+                print(job['id'], arm['model'], case['id'], record['status'], measurements, flush=True)
+    report(folder, backend.TITLE)
     return not any(r['status'] in ('failed','transport-unknown') for r in records_for(folder)[1])
 
 
@@ -258,23 +335,30 @@ def records_for(folder):
     return plan,records
 
 
-def report(folder):
+def report(folder, title=TITLE):
     folder=Path(folder).resolve();plan,records=records_for(folder)
-    lines=['# Codex CLI 批量测试','',*['- '+x for x in plan['limitations']],'',
+    webbench = plan.get('suite') == 'webbench'
+    lines=['# '+title,'',*['- '+x for x in plan['limitations']],'',
            '完成仅表示已收到全部轮次响应；语义未评分。未执行、失败和不支持的样本均保留。','',
            '| 记录 | 模型 / 推理强度 | 用例 | 状态 | 轮次 | 静态通过/失败/待定 |','|---|---|---|---|---|---|']
+    if webbench:
+        lines[-2] += ' ' + ' | '.join(label for _, label in EXECUTION_COLUMNS) + ' |'
+        lines[-1] += '---:|' * len(EXECUTION_COLUMNS)
     by_id={r['job']:r for r in records}
     for job in plan['jobs']:
         r=by_id.get(job['id']);arm=job['arm']
         tests=[c for t in r['turns'] for c in t['checks']] if r else []
         counts='/'.join(str(sum(c['pass'] is v for c in tests)) for v in (True,False,None))
         lines.append(f'| {job["id"]} | {arm["model"]} / {arm["effort"]} | {job["case"]["id"]} | {r["status"] if r else "pending"} | {len(r["turns"]) if r else 0}/{len(job["case"]["turns"])} | {counts} |')
+        if webbench:
+            lines[-1] += ' ' + ' | '.join(execution_cells(case_execution(r))) + ' |'
     (folder/'report.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
     reviewed=review_v3.rows(folder,records)
     study.save(folder/'review-results.json',reviewed)
     if reviewed:
         with (folder/'report.md').open('a',encoding='utf-8') as output:
             output.write('\n## 独立评审回收\n\n逐轮分数、复核状态和依据见 [review-results.json](review-results.json)。无效评分不采纳，分歧不自动平均。\n')
+            output.write(review_v3.totals_markdown(review_v3.totals(folder,records)))
     print(folder/'report.md')
 
 
@@ -296,7 +380,7 @@ def main():
     p=sub.add_parser('prepare',help='创建冻结计划，不调用模型')
     p.add_argument('--model',action='append',required=True,help='可重复；模型ID或模型ID@推理强度')
     p.add_argument('--effort',default='high',choices=['minimal','low','medium','high','xhigh','max','ultra'])
-    p.add_argument('--suite',default='v3-standard20',choices=['v3-standard20'])
+    p.add_argument('--suite',default=study.DEFAULT_SUITE,choices=study.SUITES)
     p.add_argument('--cases');p.add_argument('--repeat',type=int,default=1)
     p.add_argument('--timeout',type=positive,default=600,help='每轮秒数')
     p.add_argument('--codex',default='codex');p.add_argument('--output',required=True)

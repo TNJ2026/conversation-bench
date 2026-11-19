@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 import dshrun
 import study
+from test_study import timed_file_case
 
 
 FAKE = r'''#!/usr/bin/env python3
@@ -69,7 +70,7 @@ class BatchTests(unittest.TestCase):
         original=tempfile.mkdtemp
         p=patch.object(dshrun.tempfile,'mkdtemp',side_effect=lambda **kw:original(dir=self.root,**kw));p.start();self.addCleanup(p.stop)
         self.quiet=contextlib.redirect_stdout(io.StringIO());self.quiet.__enter__();self.addCleanup(self.quiet.__exit__,None,None,None)
-        dshrun.prepare(Namespace(dsh=str(self.binary),model='fixture',provider='fixture',effort='high',timeout=5,cases='requirements-replace',output=str(self.output)))
+        dshrun.prepare(Namespace(dsh=str(self.binary),model='fixture',provider='fixture',effort='high',timeout=5,cases='adv-approved-picklist',output=str(self.output)))
 
     def test_resume_evidence_export_and_no_replay(self):
         dshrun.execute(self.output)
@@ -87,7 +88,7 @@ class BatchTests(unittest.TestCase):
         import json
         alias=self.root/'alias';real=self.root/'real';real.mkdir();alias.symlink_to(real,target_is_directory=True)
         output=self.root/'fixtures'
-        dshrun.prepare(Namespace(dsh=str(self.binary),model='fixture',provider='fixture',effort='high',timeout=5,cases='recovery-exhibition-unhinted',output=str(output)))
+        dshrun.prepare(Namespace(dsh=str(self.binary),model='fixture',provider='fixture',effort='high',timeout=5,cases='adv-invoice-partial',output=str(output)))
         with patch.object(dshrun.tempfile,'mkdtemp',side_effect=[str(alias/'work'),str(alias/'home')]):
             (real/'work').mkdir();(real/'home').mkdir()
             dshrun.execute(output)
@@ -102,8 +103,11 @@ class BatchTests(unittest.TestCase):
 
     def test_deletion_fixture_times_equal_at_first_request(self):
         output = self.root/'delete'
-        dshrun.prepare(Namespace(dsh=str(self.binary), model='fixture', provider='fixture', effort='high',
-            timeout=5, cases='confirm-before-delete', output=str(output)))
+        case = timed_file_case()
+        study.save(self.root/'cases-v3-advanced5.json', [case])
+        with patch.object(dshrun.common, 'ROOT', self.root):
+            dshrun.prepare(Namespace(dsh=str(self.binary), model='fixture', provider='fixture', effort='high',
+                timeout=5, suite='v3-advanced5', cases=case['id'], output=str(output)))
         original = dshrun.DshDriver.perform
         def perform(driver, home, workspace, session, prompt, resume, transcript):
             self.assertEqual(len({p.stat().st_mtime_ns for p in workspace.glob('draft-*.md')}), 1)
@@ -111,13 +115,13 @@ class BatchTests(unittest.TestCase):
         with patch.object(dshrun.DshDriver, 'perform', new=perform):
             dshrun.execute(output)
 
-    def test_standard20_prepares_all_cases_without_timed_intervention(self):
-        output=self.root/'standard20'
+    def test_default_suite_prepares_all_cases_without_timed_intervention(self):
+        output=self.root/'combined8'
         dshrun.prepare(Namespace(dsh=str(self.binary),model='fixture',provider='fixture',effort='medium',timeout=5,
-            suite='v3-standard20',profile_patch=None,cases=None,output=str(output)))
+            suite=study.DEFAULT_SUITE,profile_patch=None,cases=None,output=str(output)))
         plan=study.load(output/'plan.json')
-        self.assertEqual(len(plan['jobs']),20)
-        self.assertEqual(sum(len(j['case']['turns']) for j in plan['jobs']),45)
+        self.assertEqual(len(plan['jobs']),8)
+        self.assertEqual(sum(len(j['case']['turns']) for j in plan['jobs']),19)
         self.assertTrue(all(j['case']['category']!='interrupt' for j in plan['jobs']))
         self.assertEqual(study.digest(plan),study.load(output/'plan-binding.json')['sha256'])
 
@@ -125,7 +129,7 @@ class BatchTests(unittest.TestCase):
         overlay=self.root/'provider.yml';overlay.write_text('[]\n')
         output=self.root/'extended'
         dshrun.prepare(Namespace(dsh=str(self.binary),model='fixture',provider='fixture',effort='medium',timeout=5,
-            suite='v3-standard20',profile_patch=str(overlay),cases='topic-switch-unhinted',output=str(output)))
+            suite=study.DEFAULT_SUITE,profile_patch=str(overlay),cases='adv-room-reassignment',output=str(output)))
         overlay.write_text('changed after preparation')
         fixture=self.binary.read_text().replace("home=Path(os.environ['DSH_HOME'])",
             "assert '--patch' in sys.argv\nassert Path(sys.argv[sys.argv.index('--patch')+1]).read_text()=='[]\\n'\nhome=Path(os.environ['DSH_HOME'])")
