@@ -135,8 +135,14 @@ def check_dates(text, values):
 SENTENCE_END = re.compile(r'[。！？!?]+')
 CHINESE_MONEY_DIGITS = '零〇一二两三四五六七八九十百千万亿'
 MONEY_NUMBER = rf'(?:[0-9０-９]+(?:[.,，．][0-9０-９]+)*[万亿]?|[{CHINESE_MONEY_DIGITS}]+)'
+ARABIC_MONEY_NUMBER = r'[0-9０-９]+(?:[.,，．][0-9０-９]+)*[万亿]?'
+# Arabic figures with a unit are money. Chinese numerals collide with everyday words
+# (一块来、三块、一元复始), so they count only with a currency sign or an explicit 钱/元钱.
 MONEY = re.compile(rf'(?:[¥￥$＄€£]|人民币)\s*{MONEY_NUMBER}|'
-                   rf'{MONEY_NUMBER}\s*(?:块(?:钱)?|元(?![旦素件气首音老])|美元|欧元|英镑)')
+                   rf'{ARABIC_MONEY_NUMBER}\s*(?:块(?:钱)?|元|美元|欧元|英镑)|'
+                   rf'[{CHINESE_MONEY_DIGITS}]+\s*(?:块钱|元钱|美元|欧元|英镑)')
+# Chinese numeral + 元/块 without 钱: may be money (十九元) or not (一元复始); left to the reviewer.
+MAYBE_MONEY = re.compile(rf'[{CHINESE_MONEY_DIGITS}]+\s*(?:元|块)')
 FINAL_AMOUNT = re.compile(rf'(?:^|[。！？；;\n，,])\s*(?:(?:所以|因此)[，,]?\s*)?'
                           rf'(?P<explicit>(?:最终|合计|总共)?(?:实付|应付|支付|付)(?:金额)?|最终|总计)?'
                           rf'\s*[:：为是]?\s*(?:[¥￥]|人民币)?\s*(?P<amount>{MONEY_NUMBER})'
@@ -239,8 +245,11 @@ def check(text, rules, earlier):
                             'detail': '仅核对可明确识别的最终金额；其他表达交由评审判断'})
         elif kind == 'no_money':
             found = MONEY.search(text)
-            results.append({'check': rule['label'], 'pass': found is None,
-                            'detail': '发现货币金额：' + found[0] if found else '未匹配常见货币金额写法'})
+            maybe = None if found else MAYBE_MONEY.search(text)
+            results.append({'check': rule['label'], 'pass': False if found else None if maybe else True,
+                            'detail': '发现货币金额：' + found[0] if found else
+                                      f'“{maybe[0]}”可能是金额也可能是普通用语（如“一块来”“一元复始”），需人工确认' if maybe else
+                                      '未匹配常见货币金额写法；换说法需人工确认'})
         elif kind == 'sentences':
             count = len(sentences(text))
             results.append({'check': rule.get('label', '句数'), 'pass': count == rule['count'],

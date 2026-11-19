@@ -1,46 +1,84 @@
-"""Evaluator-only tests. Run with submitted code inside an isolated review environment."""
+"""Evaluator-only regression scenarios for the receipt-replay repair case.
+
+Not distributed with the case materials. challenge_verify.py --regress builds randomized
+scenarios here, sends only their inputs into the sandbox, and compares what the submitted
+replay() returned against reference_replay() in the parent process. The verdict never
+depends on anything the submitted code prints or returns about itself, so it cannot be
+forged from inside the sandbox; only producing the correct balances passes.
+
+Running this file directly imports allocation.py in-process and prints a manual summary;
+that mode is a convenience for people, not evidence.
+"""
 import copy
-import io
-import unittest
-
-from allocation import read_receipts, replay
+import random
 
 
-class ReceiptReplayChecks(unittest.TestCase):
-    def test_exact_retry_with_opening_balance(self):
-        a = dict(receipt='R17', order='A', sku='pen', quantity=4)
-        initial = {('A', 'pen'): 11, ('B', 'clip'): 2}
-        rows = [a, dict(a)]
-        saved = copy.deepcopy(rows)
-        self.assertEqual(replay(initial, rows), {('A', 'pen'): 15, ('B', 'clip'): 2})
-        self.assertEqual(initial, {('A', 'pen'): 11, ('B', 'clip'): 2})
-        self.assertEqual(rows, saved)
+def reference_replay(initial, receipts):
+    """Trusted behaviour from contract.txt: batch identity is (receipt, order, sku)."""
+    balances = dict(initial); seen = {}
+    for row in receipts:
+        identity = row['receipt'], row['order'], row['sku']
+        if identity in seen:
+            if seen[identity] != row['quantity']:
+                raise ValueError(identity)
+            continue
+        seen[identity] = row['quantity']
+        key = row['order'], row['sku']
+        balances[key] = balances.get(key, 0) + row['quantity']
+    return balances
 
-    def test_same_quantity_is_not_identity(self):
-        rows = read_receipts(io.StringIO('receipt,order,sku,quantity\nr,A,pen,3\ns,A,pen,3\nr,A,clip,3\nr,B,pen,3\n'))
-        self.assertEqual(replay({}, rows), {('A', 'pen'): 6, ('A', 'clip'): 3, ('B', 'pen'): 3})
 
-    def test_conflicting_quantity_fails(self):
-        a = dict(receipt='R', order='A', sku='pen', quantity=4)
-        with self.assertRaises(ValueError):
-            replay({}, [a, dict(a, quantity=5)])
+def scenarios(rng=None):
+    """[(name, calls)] where calls is a list of (initial, receipts or csv text) run in one process.
 
-    def test_non_adjacent_retry_counts_once(self):
-        # The incident batch replays R7 after R8; a fix that only compares neighbours misses it.
-        rows = read_receipts(io.StringIO('receipt,order,sku,quantity\nR7,A1,pen,3\nR8,A1,pen,3\nR7,A1,pen,3\n'))
-        self.assertEqual(replay({('A1', 'pen'): 1}, rows), {('A1', 'pen'): 7})
+    Values are random per run so expected balances cannot be precomputed by the submission.
+    """
+    rng = rng or random.SystemRandom()
+    token = lambda prefix: f'{prefix}{rng.randrange(10**5, 10**6)}'
+    qty = lambda: rng.randrange(2, 40)
+    order, other_order, sku, other_sku = token('O'), token('O'), token('S'), token('S')
+    r1, r2, r3 = token('R'), token('R'), token('R')
+    q, q2 = qty(), qty()
+    row = lambda receipt, o, s, n: dict(receipt=receipt, order=o, sku=s, quantity=n)
+    opening = {(order, sku): qty(), (other_order, other_sku): qty()}
+    return [
+        ('exact_retry_with_opening_balance', [(opening, [row(r1, order, sku, q), row(r1, order, sku, q)])]),
+        ('same_quantity_is_not_identity', [({}, 'receipt,order,sku,quantity\n'
+            f'{r1},{order},{sku},{q}\n{r2},{order},{sku},{q}\n{r1},{order},{other_sku},{q}\n{r1},{other_order},{sku},{q}\n')]),
+        ('conflicting_quantity', [({}, [row(r1, order, sku, q), row(r1, order, sku, q + 1)])]),
+        ('non_adjacent_retry', [({(order, sku): 1}, [row(r1, order, sku, q), row(r2, order, sku, q), row(r1, order, sku, q)])]),
+        ('non_adjacent_conflict', [({}, [row(r1, order, sku, q), row(r2, order, sku, q), row(r1, order, sku, q + 1)])]),
+        ('state_does_not_leak_between_calls', [({}, [row(r3, order, sku, q2)] * 2), ({}, [row(r3, order, sku, q2)] * 2)]),
+    ]
 
-    def test_non_adjacent_conflict_fails(self):
-        a = dict(receipt='R', order='A', sku='pen', quantity=4)
-        other = dict(receipt='S', order='A', sku='pen', quantity=4)
-        with self.assertRaises(ValueError):
-            replay({}, [a, other, dict(a, quantity=5)])
 
-    def test_dedupe_state_does_not_leak_between_calls(self):
-        rows = [dict(receipt='r', order='A', sku='pen', quantity=2)] * 2
-        self.assertEqual(replay({}, rows), {('A', 'pen'): 2})
-        self.assertEqual(replay({}, rows), {('A', 'pen'): 2})
+def expected(calls):
+    """Reference outcome per call: ('ok', balances) or ('error', 'ValueError')."""
+    import csv
+    import io
+    results = []
+    for initial, receipts in calls:
+        if isinstance(receipts, str):
+            receipts = [dict(receipt=r['receipt'], order=r['order'], sku=r['sku'], quantity=int(r['quantity']))
+                        for r in csv.DictReader(io.StringIO(receipts))]
+        try:
+            results.append(('ok', reference_replay(copy.deepcopy(initial), copy.deepcopy(receipts))))
+        except ValueError:
+            results.append(('error', 'ValueError'))
+    return results
 
 
 if __name__ == '__main__':
-    unittest.main()
+    import io
+    from allocation import read_receipts, replay
+    failures = 0
+    for name, calls in scenarios():
+        for (initial, receipts), want in zip(calls, expected(calls)):
+            rows = read_receipts(io.StringIO(receipts)) if isinstance(receipts, str) else receipts
+            try:
+                got = ('ok', replay(initial, rows))
+            except ValueError:
+                got = ('error', 'ValueError')
+            failures += got != want
+            print(('ok  ' if got == want else 'FAIL'), name)
+    raise SystemExit(1 if failures else 0)

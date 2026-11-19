@@ -1,8 +1,9 @@
-"""Check recorded challenge artifacts; with --regress, also run the hidden repair tests.
+"""Check recorded challenge artifacts; with --regress, also run the hidden repair scenarios.
 
-Plain mode only reads records. --regress executes the submitted allocation.py against
-challenge_repair_hidden.py in an OS sandbox and stores the outcome in the record
-so export can link it to the repair requirement.
+Plain mode only reads records. --regress executes the submitted allocation.py on randomized
+scenarios from challenge_repair_hidden.py inside an OS sandbox, compares its raw results with
+the reference implementation outside the sandbox, and stores the outcome in the record so
+export can link it to the repair requirement.
 """
 import argparse
 import csv
@@ -32,7 +33,10 @@ EXPECTED_DISPATCH = [
 
 
 def csv_rows(artifacts, name):
-    return list(csv.reader(io.StringIO(artifacts.get(name, '')), strict=True))
+    """Parsed rows with a leading BOM, blank lines and cell padding ignored, like study.expect_csv."""
+    text = artifacts.get(name, '').lstrip('\ufeff')
+    return [[cell.strip() for cell in row] for row in csv.reader(io.StringIO(text), strict=True)
+            if any(cell.strip() for cell in row)]
 
 
 def csv_matches(artifacts, name, expected, ordered=True):
@@ -97,19 +101,62 @@ HIDDEN = Path(__file__).with_name('challenge_repair_hidden.py')
 REPAIR_CASE = 'adv-repair-receipt-replay'
 REGRESSION_CHECK = '未公开回归测试（challenge_repair_hidden）'
 SANDBOX_EXEC = Path('/usr/bin/sandbox-exec')
-BOOTSTRAP = """import os, resource, runpy, sys, unittest
+# Runs inside the sandbox. It only executes the submission on the given inputs and reports raw
+# results; the parent compares them with the reference, so nothing printed here decides a verdict.
+BOOTSTRAP = """import io, json, os, resource, sys
 resource.setrlimit(resource.RLIMIT_FSIZE, (262144, 262144))
+request = json.loads(sys.stdin.read())
 sys.path.insert(0, os.getcwd())
-print('review sandbox ready', flush=True)
-suite = unittest.TestSuite()
-namespace = runpy.run_path('challenge_repair_hidden.py')
-for item in namespace.values():
-    if isinstance(item, type) and issubclass(item, unittest.TestCase):
-        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(item))
-result = unittest.TextTestRunner(verbosity=2).run(suite)
-print('review tests finished', flush=True)
-sys.exit(0 if result.testsRun and result.wasSuccessful() else 1)
+def encode(value):
+    if not isinstance(value, dict):
+        return dict(kind='bad', detail='replay did not return a dict')
+    try:
+        return dict(kind='ok', balances=sorted([list(k) + [v] for k, v in value.items()], key=repr))
+    except TypeError:
+        return dict(kind='bad', detail='balance keys are not (order, sku) pairs')
+results = []
+try:
+    import allocation
+except Exception as error:
+    results = [dict(kind='import_error', detail=type(error).__name__)]
+else:
+    for scenario in request['scenarios']:
+        outcome = []
+        for call in scenario['calls']:
+            initial = {tuple(k): v for *k, v in call['initial']}
+            before = json.dumps(call['initial'])
+            try:
+                if call['csv'] is not None:
+                    rows = allocation.read_receipts(io.StringIO(call['csv']))
+                else:
+                    rows = call['receipts']
+                    rows_before = json.dumps(rows, sort_keys=True)
+                result = encode(allocation.replay(initial, rows))
+                if json.dumps(sorted([list(k) + [v] for k, v in initial.items()], key=repr)) != json.dumps(sorted(call['initial'], key=repr)):
+                    result = dict(kind='bad', detail='initial balances were modified')
+                elif call['csv'] is None and json.dumps(rows, sort_keys=True) != rows_before:
+                    result = dict(kind='bad', detail='receipt rows were modified')
+            except ValueError:
+                result = dict(kind='error', detail='ValueError')
+            except Exception as error:
+                result = dict(kind='crash', detail=type(error).__name__)
+            outcome.append(result)
+        results.append(outcome)
+sys.stdout.write('\\n' + request['nonce'] + json.dumps(results) + '\\n')
+sys.stdout.flush()
 """
+
+
+def wire(calls):
+    """JSON-safe form of scenario calls; tuple keys become [order, sku, value] rows."""
+    return [dict(initial=[[*k, v] for k, v in initial.items()],
+                 csv=receipts if isinstance(receipts, str) else None,
+                 receipts=None if isinstance(receipts, str) else receipts) for initial, receipts in calls]
+
+
+def reference_form(want):
+    return [dict(kind='ok', balances=sorted([[*k, v] for k, v in balances.items()], key=repr)) if kind == 'ok'
+            else dict(kind='error', detail='ValueError') for kind, balances in want]
 
 
 def sandbox_command(directory):
@@ -136,7 +183,14 @@ def sandbox_command(directory):
 
 
 def regress(record, timeout=60):
-    """Run the hidden tests against the turn-1 allocation.py; None when the record has nothing to test."""
+    """Run randomized hidden scenarios against the turn-1 allocation.py; None when there is nothing to test.
+
+    The submission only ever sees scenario inputs. Its raw results are compared with the
+    reference implementation here, outside the sandbox, so printing success markers,
+    exiting early or patching unittest inside the sandbox cannot produce a pass.
+    """
+    import challenge_repair_hidden as hidden_module
+    import secrets
     turns = record.get('turns') or []
     if record['case']['id'] != REPAIR_CASE or not turns:
         return None
@@ -145,33 +199,43 @@ def regress(record, timeout=60):
     base = dict(turn=1, hidden_sha256=hashlib.sha256(hidden.encode()).hexdigest())
     if source is None:
         return dict(base, **{'pass': False}, summary='第1轮快照中没有 allocation.py')
+    cases = hidden_module.scenarios()
+    nonce = 'RESULT-' + secrets.token_hex(16) + ':'
+    request = json.dumps(dict(nonce=nonce, scenarios=[dict(name=name, calls=wire(calls)) for name, calls in cases]))
     with tempfile.TemporaryDirectory(prefix='challenge-regress-') as temporary:
         directory = Path(temporary).resolve()
         command = sandbox_command(directory)
         if command is None:
             return dict(base, **{'pass': None}, summary='缺少受支持的评审沙箱（macOS sandbox-exec）')
         (directory / 'allocation.py').write_text(source, encoding='utf-8')
-        (directory / 'challenge_repair_hidden.py').write_text(hidden, encoding='utf-8')
         try:
-            with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-                done = subprocess.run(command, cwd=directory, env={'HOME': str(directory)}, stdin=subprocess.DEVNULL,
-                                      stdout=stdout, stderr=stderr, timeout=timeout)
+            with tempfile.TemporaryFile() as stdin, tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+                stdin.write(request.encode()); stdin.seek(0)
+                subprocess.run(command, cwd=directory, env={'HOME': str(directory)}, stdin=stdin,
+                               stdout=stdout, stderr=stderr, timeout=timeout)
                 stdout.seek(0)
-                stderr.seek(0)
-                output = stdout.read(262144).decode('utf-8', errors='replace').splitlines()
-                errors = stderr.read(262144).decode('utf-8', errors='replace')
+                output = stdout.read(1048576).decode('utf-8', errors='replace')
         except subprocess.TimeoutExpired:
             return dict(base, **{'pass': False}, summary=f'超过 {timeout} 秒未结束')
         except OSError as error:
             return dict(base, **{'pass': None}, summary=f'评审沙箱启动失败：{error}')
-    if not output or output[0] != 'review sandbox ready':
-        return dict(base, **{'pass': None}, summary='评审沙箱未完成初始化')
-    lines = [x for x in errors.strip().splitlines() if x.strip()]
-    tail = lines[-1] if lines else ''
-    failed = [x for x in lines if x.startswith(('FAIL:', 'ERROR:'))]
-    passed = done.returncode == 0 and 'review tests finished' in output
-    summary = tail + ('；' + '；'.join(failed) if failed else '')
-    return dict(base, **{'pass': passed}, summary=summary or '回归测试未完整执行')
+    reports = [line[len(nonce):] for line in output.splitlines() if line.startswith(nonce)]
+    try:
+        results = json.loads(reports[-1]) if reports else None
+    except ValueError:
+        results = None
+    if not isinstance(results, list):
+        return dict(base, **{'pass': False}, summary='沙箱内没有返回可解析的运行结果（被测代码崩溃、提前退出或截断了输出）')
+    if len(results) == 1 and isinstance(results[0], dict) and results[0].get('kind') == 'import_error':
+        return dict(base, **{'pass': False}, summary=f'导入 allocation.py 失败：{results[0].get("detail")}')
+    failed = []
+    for (name, calls), got in zip(cases, results + [None] * (len(cases) - len(results))):
+        if got != reference_form(hidden_module.expected(calls)):
+            failed.append(name)
+    total = len(cases)
+    summary = (f'{total - len(failed)}/{total} 个场景与参考实现一致' +
+               ('；不一致：' + '、'.join(failed) if failed else '') + '；输入每次随机生成，判定在沙箱外完成')
+    return dict(base, **{'pass': not failed}, summary=summary)
 
 
 def main():
@@ -185,6 +249,9 @@ def main():
         record = json.loads(path.read_text(encoding='utf-8'))
         if args.regress and record['case']['id'] == REPAIR_CASE and record.get('status') == 'completed':
             outcome = regress(record)
+            if outcome is not None and outcome['pass'] is None:
+                print(f'{record["job"]}: 回归未执行，结果记为待定（{outcome["summary"]}）；R2 不受约束，需人工判断',
+                      file=sys.stderr)
             if outcome is not None:
                 # Export binds record hashes, so run this before export; afterwards the old binding is rejected.
                 record['hidden_regression'] = outcome

@@ -198,7 +198,9 @@ def artifact_checks(spec, files, previous, artifacts, limits=()):
         name = expected['file']
         text = artifacts.get(name)
         try:
-            rows_found = None if text is None else [[cell.strip() for cell in row] for row in csv.reader(io.StringIO(text), strict=True) if row]
+            rows_found = None if text is None else [[cell.strip() for cell in row]
+                                                    for row in csv.reader(io.StringIO(text.lstrip('\ufeff')), strict=True)
+                                                    if any(cell.strip() for cell in row)]
         except csv.Error:
             rows_found = []
         want = expected['rows']

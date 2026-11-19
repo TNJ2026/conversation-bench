@@ -270,8 +270,11 @@ class Guard4Tests(unittest.TestCase):
         too_many = self.check('guard-stacked-format', 1, reminder + '预算4500元。')
         self.assertEqual((too_many['恰好两句'], too_many['不含金额']), (False, False))
         self.assertTrue(self.check('guard-stacked-format', 1, '冬季读书周共39人。欢迎分享多元阅读心得。')['不含金额'])
-        for price in ('十九元', '￥180', '49.50 元', '20美元'):
+        for price in ('十九块钱', '￥180', '49.50 元', '20美元', '20块'):
             self.assertFalse(self.check('guard-stacked-format', 1, f'冬季读书周共39人。请准备{price}。')['不含金额'])
+        # Chinese numerals with 元/块 collide with ordinary words; never a hard failure.
+        for phrase in ('欢迎大家一块来读书', '我们分三块讨论', '一元复始，欢迎参加', '请准备十九元'):
+            self.assertIsNone(self.check('guard-stacked-format', 1, f'冬季读书周共39人。{phrase}。')['不含金额'])
         later = self.check('guard-stacked-format', 2, reminder + '负责人确定后另行通知。')
         self.assertEqual(set(later.values()), {True})
         self.assertFalse(self.check('guard-stacked-format', 2, reminder + '负责人小周确定后另行通知。')['不含原负责人姓名'])
@@ -379,7 +382,7 @@ class LinkedCheckTests(unittest.TestCase):
             self.skipTest('macOS review sandbox not available')
         original = next(x for x in study.load_catalog('v3-challenge3') if x['id'] == challenge_verify.REPAIR_CASE)['fixtures']['allocation.py']
         broken = challenge_verify.regress(self.repair_record(original))
-        self.assertFalse(broken['pass']); self.assertIn('FAILED', broken['summary'])
+        self.assertFalse(broken['pass']); self.assertIn('不一致：exact_retry_with_opening_balance', broken['summary'])
         fixed = self.repair_record(self.FIXED)
         fixed['hidden_regression'] = challenge_verify.regress(fixed)
         self.assertTrue(fixed['hidden_regression']['pass'])
@@ -414,12 +417,54 @@ assert blocked(os.fork)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(marker.read_text(encoding='utf-8'), 'outside')
 
+    def test_submission_cannot_forge_a_pass(self):
+        import challenge_verify
+        if challenge_verify.sandbox_command(self.folder) is None:
+            self.skipTest('macOS review sandbox not available')
+        original = next(x for x in study.load_catalog('v3-challenge3') if x['id'] == challenge_verify.REPAIR_CASE)['fixtures']['allocation.py']
+        forgeries = {
+            'success marker then exit': "\nimport os, sys\nsys.stdout.write('review tests finished\\n'); sys.stdout.flush(); os._exit(0)\n",
+            'disabled assertions': "\nimport unittest\nunittest.TestCase.assertEqual = lambda *a, **k: None\n",
+            'guessed result line': "\nimport sys\nsys.stdout.write('\\nRESULT-0:[]\\n')\n",
+            'echo expected from stdin': "\nimport sys, json\nrequest = json.loads(sys.stdin.read() or '{}')\n",
+        }
+        for name, tail in forgeries.items():
+            with self.subTest(name):
+                self.assertIs(challenge_verify.regress(self.repair_record(original + tail))['pass'], False)
+        self.assertIs(challenge_verify.regress(self.repair_record(self.FIXED.replace('balances = dict(initial)', 'balances = initial')))['pass'], False)
+        self.assertIs(challenge_verify.regress(self.repair_record('def replay(:\n'))['pass'], False)
+
+    def test_scenarios_are_randomized_and_reference_agrees_with_contract(self):
+        import challenge_repair_hidden as hidden
+        first, second = hidden.scenarios(), hidden.scenarios()
+        self.assertNotEqual(first, second)
+        outcomes = dict((name, hidden.expected(calls)) for name, calls in first)
+        self.assertEqual(outcomes['conflicting_quantity'], [('error', 'ValueError')])
+        self.assertEqual(outcomes['non_adjacent_conflict'], [('error', 'ValueError')])
+        (kind, balances), = outcomes['non_adjacent_retry']
+        quantity = dict(first)['non_adjacent_retry'][0][1][0]['quantity']
+        self.assertEqual(list(balances.values()), [1 + quantity + quantity])
+        a, b = outcomes['state_does_not_leak_between_calls']
+        self.assertEqual(a, b)
+
     def test_unsupported_sandbox_never_executes_submission(self):
         import challenge_verify
         with patch.object(challenge_verify, 'sandbox_command', return_value=None), \
              patch.object(challenge_verify.subprocess, 'run') as run:
             self.assertIsNone(challenge_verify.regress(self.repair_record(self.FIXED))['pass'])
             run.assert_not_called()
+
+    def test_dispatch_rows_ignore_layout_but_not_content(self):
+        import challenge_verify as cv
+        good = 'id,mode,status\nkiosk,pickup,ready\nfrontdesk,pickup,ready\nnight,after_hours,blocked\ncourier,courier,ready\n'
+        for text in (good, good + '\n\n', good.replace('\n', '\r\n'), good.replace(',', ', '), '\ufeff' + good):
+            self.assertTrue(cv.csv_matches({'dispatch.csv': text}, 'dispatch.csv', cv.EXPECTED_DISPATCH, ordered=False), repr(text))
+        for text in (good.replace('blocked', 'ready'), good.replace('after_hours', 'courier'), good.replace('courier,courier,ready\n', '')):
+            self.assertFalse(cv.csv_matches({'dispatch.csv': text}, 'dispatch.csv', cv.EXPECTED_DISPATCH, ordered=False), repr(text))
+        spec = next(x for x in study.load_catalog('v3-advanced5') if x['id'] == 'adv-approved-picklist')['turns'][0]
+        picklist = '\ufefforder,item,allocated,backorder\n\nA01,贴纸,4,0\nA02,笔,3,0\nA03,贴纸,2,4\nA04,笔,2,2\n\n'
+        row = next(r for r in study.artifact_checks(spec, {}, {}, {'picklist.csv': picklist}) if r['check'] == 'picklist.csv内容正确')
+        self.assertTrue(row['pass'])
 
     def test_routing_failure_is_linked_to_each_affected_requirement(self):
         from challenge_verify import CHECK_LABELS
