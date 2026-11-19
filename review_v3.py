@@ -21,9 +21,10 @@ PROTOCOL = {
     'completion': 'coverage单列计划/已提交/未提交轮次及终止状态。失败仍保留；未提交轮次不计满分、不计未知事实错误。任务完成度不得从三维文字分数推导。',
     'importance': 'critical=错误/遗漏会改变事实结论、授权边界、执行条件，或违反明确交付硬约束；minor=不改变这些内容的局部说明/风格要求。以逐例requirements为准，协议是否执行不计模型分。',
     'correction': '逐轮保留分数，另填corrections说明在哪一轮主动修正/经提示修正/仍未修正；后续修正不覆盖前轮分数。',
-    'total': '报告按固定口径为每位评审、每个题组分别计算题目等权总分：每题先按轮平均各维度，再平均该题有分数的维度，同一题组内各题等权后乘以20；Advanced5与Challenge3分行，不合并；留空不计，未完成全部轮次的样本不计入并单列。不同评审的总分不合并、不平均。',
+    'total': '报告按固定口径为每位评审、每个题组分别计算题目等权总分：每题先按轮平均各维度，再平均该题有分数的维度，同一题组内各题等权后乘以20；Advanced5、Challenge3、Guard4分行，不合并；留空不计，未完成全部轮次的样本不计入并单列。不同评审的总分不合并、不平均。',
     'independence': 'r1与r2必须先独立填写各自副本，不看对方分数；填不同reviewer和真实review_type。AI评审填写model。独立性属于声明，软件不能证明。',
     'disagreement': '逐轮逐维比较两评；任一分歧保留双方证据，第三位评审填写scores-adjudicated.json及裁决原因。未裁决不合成分数；不求平均。',
+    'checks': '要求可关联自动检查（samples[].turns[].requirement_checks）。关联检查本轮未通过时，该要求只能判partial、missed或na，判met会被拒收；检查待人工（pass=null）时不约束。检查通过不代表要求满足：字面匹配会漏掉换说法的违规，仍由评审判断。',
     'evidence': f'每个数值评分都需该轮答案/产物/要求/来源的精确引用和解释，引文至少{MIN_QUOTE}个非空白字符（引用整段短文本除外）；缺失问题可用kind=requirement引用本轮生效的要求原文。要求状态和计数只做结构一致性验证，不是语义真伪证明。',
     'limits': '静态文件快照不能证明从未写入；未提供工具记录/观察证据时，执行行为不可判定。运行方式完整记录每轮工具调用（批量脚本）时，执行证据为空即视为未调用工具，“不联网”“不写文件”等要求判满足。材料/文本可能透露应用身份，分享前检查，不能保证完全匿名。',
 }
@@ -47,9 +48,38 @@ def recorded_verifications(record):
     labels = {'file_scope': '文件范围（challenge_verify）', 'dispatch_rows': 'dispatch.csv内容（challenge_verify）',
               'routing': 'routing.json仅改kiosk（challenge_verify）', 'dispatch_kept': 'dispatch.csv未被改动（challenge_verify）',
               'snapshot_complete': '快照完整（challenge_verify）'}
-    return {item['turn']: [dict(check=labels.get(key, key), detail='评审侧结构化校验，只读记录、不执行被测代码；语义仍需人工判断',
+    rows = {item['turn']: [dict(check=labels.get(key, key), detail='评审侧结构化校验，只读记录、不执行被测代码；语义仍需人工判断',
                                 **{'pass': value}) for key, value in item['checks'].items()]
             for item in results}
+    hidden = record.get('hidden_regression')
+    if hidden:
+        rows.setdefault(hidden['turn'], []).append(dict(check=challenge_verify.REGRESSION_CHECK, **{'pass': hidden['pass']},
+            detail=hidden['summary'] + f'；测试文件SHA256 {hidden["hidden_sha256"][:12]}；由 challenge_verify.py --regress 在评审侧执行'))
+    elif record['case']['id'] == challenge_verify.REPAIR_CASE and record.get('turns'):
+        rows.setdefault(1, []).append(dict(check=challenge_verify.REGRESSION_CHECK, **{'pass': None},
+            detail='尚未运行；导出前执行 challenge_verify.py --study … --regress'))
+    return rows
+
+
+def same_check(label, name):
+    # Older cases link the generic label; checks are now named per material file.
+    return label == name or (name == '原始材料未变' and label.endswith(name))
+
+
+def requirement_links(case, number, checks):
+    """[{id, check, pass}] for every automatic check a requirement is linked to in this turn."""
+    links = case.get('auto') or {}
+    requirements = (case.get('evaluation') or {}).get('requirements') or []
+    by_text = {r['text']: r['id'] for r in requirements}
+    rows = []
+    for criterion, pairs in links.items():
+        if criterion not in by_text: continue
+        for turn, name in pairs:
+            if turn not in (None, number): continue
+            for check in checks:
+                if same_check(check['check'], name):
+                    rows.append(dict(id=by_text[criterion], check=check['check'], **{'pass': check['pass']}))
+    return rows
 
 
 def sample_of(record, label):
@@ -63,8 +93,10 @@ def sample_of(record, label):
         # Old records have only the operator's declaration, never present it as a transcript.
         if observed and intervention is None:
             intervention = spec.get('interrupt_with')
+        turn_checks = done.get('checks', []) + verified.get(number, [])
         turns.append(dict(number=number, prompt=done['prompt'], answer=done['answer'],
-            artifacts=done.get('artifacts', {}), checks=done.get('checks', []) + verified.get(number, []),
+            artifacts=done.get('artifacts', {}), checks=turn_checks,
+            requirement_checks=requirement_links(case, number, turn_checks),
             files=done.get('files', {}), operator_notes=done.get('notes', ''),
             execution_evidence=done.get('execution_evidence', []),
             intervention={'text': intervention if observed else None,
@@ -203,6 +235,9 @@ def render_markdown(packet):
             if turn['checks']:
                 mark = {True: '通过', False: '**未通过**', None: '待人工'}
                 out += ['**自动检查**', ''] + [f'- {mark[c["pass"]]} · {c["check"]}：{c["detail"]}' for c in turn['checks']] + ['']
+            if turn.get('requirement_checks'):
+                mark = {True: '通过', False: '**未通过，该要求不得判met**', None: '待人工，不约束'}
+                out += ['**要求关联的自动检查**', ''] + [f'- {x["id"]} ← {x["check"]}：{mark[x["pass"]]}' for x in turn['requirement_checks']] + ['']
             evidence = turn['execution_evidence']
             if evidence:
                 out += [f'<details><summary>执行证据（{len(evidence)} 条，引用时用 kind=execution 与 index）</summary>', '']
@@ -319,6 +354,9 @@ def validate_sheet(sheet, packet, packet_hash, adjudicated=False):
         for turn in turns:
             active = active_requirements(sample, turn['number'])
             statuses = check_statuses(turn, active)
+            for link in sample['turns'][turn['number']-1].get('requirement_checks', []):
+                if link['pass'] is False and statuses.get(link['id']) == 'met':
+                    raise ValueError(f'第{turn["number"]}轮{link["id"]}关联的自动检查“{link["check"]}”未通过，该要求不得判met')
             derived = {}
             if active:
                 critical, partial, minor = requirement_counts(active, statuses, 'instruction')

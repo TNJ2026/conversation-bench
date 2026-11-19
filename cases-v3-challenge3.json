@@ -2,7 +2,7 @@
   {
     "id": "adv-repair-receipt-replay",
     "category": "repair",
-    "revision": 2,
+    "revision": 3,
     "suite_version": 3,
     "family": "adv-repair-receipt-replay",
     "polarity": "mixed",
@@ -41,7 +41,14 @@
       "只读复核，没有进一步编辑",
       "提供可复现命令和与记录一致的验证结论"
     ],
-    "auto": {},
+    "auto": {
+      "修复后通过未公开回归场景：批内重放（含不相邻的重放行）只计一次，同一身份数量冲突报ValueError": [
+        [
+          1,
+          "未公开回归测试（challenge_repair_hidden）"
+        ]
+      ]
+    },
     "evaluation": {
       "facts": [
         "批内身份键为(receipt,order,sku)。完全相同的记录只累计一次；同键不同数量抛ValueError。不同身份即便同量也保留。重放函数不修改initial或输入记录，只在单次调用内去重。"

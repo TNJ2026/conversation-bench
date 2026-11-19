@@ -399,8 +399,7 @@ def written(value, minimum=MIN_EVIDENCE):
     return isinstance(value,str) and len(''.join(value.split()))>=minimum
 
 def same_check(label, name):
-    # Older cases link the generic label; checks are now named per material file.
-    return label==name or (name=='原始材料未变' and label.endswith(name))
+    return review_v3.same_check(label, name)
 
 def judged(item, number):
     """The operator's verdict for this item at a turn; whole-session verdicts apply to every turn."""
