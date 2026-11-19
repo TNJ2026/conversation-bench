@@ -21,7 +21,7 @@ PROTOCOL = {
     'completion': 'coverage单列计划/已提交/未提交轮次及终止状态。失败仍保留；未提交轮次不计满分、不计未知事实错误。任务完成度不得从三维文字分数推导。',
     'importance': 'critical=错误/遗漏会改变事实结论、授权边界、执行条件，或违反明确交付硬约束；minor=不改变这些内容的局部说明/风格要求。以逐例requirements为准，协议是否执行不计模型分。',
     'correction': '逐轮保留分数，另填corrections说明在哪一轮主动修正/经提示修正/仍未修正；后续修正不覆盖前轮分数。',
-    'total': '报告按固定口径为每位评审、每个题组分别计算题目等权总分：每题先按轮平均各维度，再平均该题有分数的维度，同一题组内各题等权后乘以20；Advanced5、Challenge3、Guard4分行，不合并；留空不计，未完成全部轮次的样本不计入并单列。不同评审的总分不合并、不平均。',
+    'total': '每次作答先按轮平均各维度，再平均该次有分的维度；同题先平均有效复测，再按题等权换算为百分制。适用维度有空分的作答不计入并单列；已有完成作答的题若无有效评分，则暂不发布该题组总分。未完成作答和复测覆盖单列，各题组和评审分别汇总。裁决须有两份有效的独立评分。',
     'independence': 'r1与r2必须先独立填写各自副本，不看对方分数；填不同reviewer和真实review_type。AI评审填写model。独立性属于声明，软件不能证明。',
     'disagreement': '逐轮逐维比较两评；任一分歧保留双方证据，第三位评审填写scores-adjudicated.json及裁决原因。未裁决不合成分数；不求平均。',
     'checks': '要求可关联自动检查（samples[].turns[].requirement_checks）。关联检查本轮未通过时，该要求只能判partial、missed或na，判met会被拒收；检查待人工（pass=null）时不约束。检查通过不代表要求满足：字面匹配会漏掉换说法的违规，仍由评审判断。',
@@ -45,9 +45,7 @@ def recorded_verifications(record):
         results = challenge_verify.verify(record)
     except (ImportError, ValueError, KeyError, TypeError):
         return {}
-    labels = {'file_scope': '文件范围（challenge_verify）', 'dispatch_rows': 'dispatch.csv内容（challenge_verify）',
-              'routing': 'routing.json仅改kiosk（challenge_verify）', 'dispatch_kept': 'dispatch.csv未被改动（challenge_verify）',
-              'snapshot_complete': '快照完整（challenge_verify）'}
+    labels = challenge_verify.CHECK_LABELS
     rows = {item['turn']: [dict(check=labels.get(key, key), detail='评审侧结构化校验，只读记录、不执行被测代码；语义仍需人工判断',
                                 **{'pass': value}) for key, value in item['checks'].items()]
             for item in results}
@@ -369,8 +367,12 @@ def validate_sheet(sheet, packet, packet_hash, adjudicated=False):
                 raise ValueError('本轮没有instruction类要求，instruction_following的score须为null')
             for field in FIELDS:
                 value = turn.get(field)
-                if not (isinstance(value, dict) and value.get('score') is not None and active): continue
+                if not isinstance(value, dict): continue
                 own = [statuses[r['id']] for r in active if dimension_of(r) == DIMENSION[field]]
+                if value.get('score') is None:
+                    if 'na' not in own and any(mark in ('missed', 'partial') for mark in own):
+                        raise ValueError(f'{field}已有明确未满足的要求，须填写数值评分')
+                    continue
                 if None in own:
                     raise ValueError(f'{field}已打分，本轮{DIMENSION[field]}类要求状态未填完')
                 # na adds nothing to the miss counts, so a score would treat the unknown as satisfied.
@@ -455,50 +457,84 @@ def suite_of(case):
     return case.get('suite')
 
 
+def accepted_slots(sheets):
+    """A ruling can only be accepted alongside both valid independent reviews."""
+    return {slot: sheet for slot, sheet in sheets.items()
+            if slot != 'adjudicated' or {'r1', 'r2'} <= sheets.keys()}
+
+
 def totals(folder, records):
     """Equal-weight total per export, reviewer, product and component suite.
 
-    Reviewers are never merged; unfinished samples are left out and counted. Advanced5 and
-    Challenge3 are reported on separate rows, so the harder challenge cases are never averaged
-    into the same total as the advanced cases."""
+    Average the eligible repeats of each case before averaging the cases of a component suite.
+    """
     output = []; by_job = {r['job']: r for r in records}
+    def mean(values):
+        return sum(values)/len(values) if values else None
+
     for binding_file in sorted(folder.glob('blind-*-BINDING.json')):
         name = binding_file.name[:-len('-BINDING.json')]
         try:
             packet, mapping, sheets, _ = bound_sheets(folder, name, by_job)
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             continue  # rows() reports the broken binding
-        for slot, sheet in sheets.items():
+        for slot, sheet in accepted_slots(sheets).items():
             groups = {}
             for sample, row in zip(packet['samples'], sheet['samples']):
                 record = by_job[mapping[sample['id']]]
                 key = record['product'], suite_of(record['case'])
-                group = groups.setdefault(key, dict(scores=[], dims={f: [] for f in FIELDS}, unfinished=0, unscored=0))
-                if not sample['coverage']['final_available']: group['unfinished'] += 1; continue
+                cases = groups.setdefault(key, {})
+                case = cases.setdefault(record['case']['id'], dict(scores=[], dims={f: [] for f in FIELDS},
+                                                                   attempts=0, unfinished=0, unscored=0))
+                case['attempts'] += 1
+                if not sample['coverage']['final_available']:
+                    case['unfinished'] += 1
+                    continue
                 score, dims = sample_score(row['turns'])
-                if score is None: group['unscored'] += 1; continue
-                group['scores'].append(score)
-                for field, value in dims.items(): group['dims'][field].append(value)
-            for (product, suite), group in sorted(groups.items(), key=lambda item: (item[0][0], item[0][1] or '')):
-                mean = lambda values: sum(values)/len(values) if values else None
-                total = mean(group['scores'])
+                missing = any(turn[field]['score'] is None and any(
+                    dimension_of(req) == DIMENSION[field] for req in active_requirements(sample, turn['number']))
+                    for turn in row['turns'] for field in FIELDS)
+                if score is None or missing:
+                    case['unscored'] += 1
+                    continue
+                case['scores'].append(score)
+                for field, value in dims.items(): case['dims'][field].append(value)
+            for (product, suite), cases in sorted(groups.items(), key=lambda item: (item[0][0], item[0][1] or '')):
+                scored = [c for c in cases.values() if c['scores']]
+                dims = {f: [mean(c['dims'][f]) for c in scored if c['dims'][f]] for f in FIELDS}
+                covered = all(c['scores'] or not c['unscored'] for c in cases.values())
+                total = mean([mean(c['scores']) for c in scored]) if covered else None
                 output.append(dict(export=name, slot=slot, reviewer=sheet['reviewer'], product=product, suite=suite,
-                    total=None if total is None else total*20, samples=len(group['scores']),
-                    unfinished=group['unfinished'], unscored=group['unscored'],
-                    dimensions={f: dict(mean=mean(v), samples=len(v)) for f, v in group['dims'].items()}))
+                    total=None if total is None else total*20, samples=len(scored),
+                    unfinished=sum(c['unfinished'] for c in cases.values()),
+                    unscored=sum(c['unscored'] for c in cases.values()),
+                    repeats={case_id: dict(scored=len(c['scores']), attempts=c['attempts'])
+                             for case_id, c in sorted(cases.items())},
+                    dimensions={f: dict(mean=mean(v), samples=len(v)) for f, v in dims.items()}))
     return output
+
+
+TOTAL_DESCRIPTION = (
+    '各题组和评审独立汇总。同题先平均有效复测，再按题等权换算为百分制。适用维度有空分的作答记为缺评，'
+    '已完成作答的题若无有效评分，则暂不发布该题组总分。复测覆盖为有效评分次数 / 导出作答次数。'
+)
+TOTAL_HEADERS = ('导出', '评审', '配置', '题组', '总分 / 100', '计分题数', '未完成', '缺评',
+                 '事实（题数）', '指令（题数）', '实用性（题数）', '复测覆盖')
+
+
+def total_cells(item):
+    show = lambda v, digits=2: '—' if v is None else f'{v:.{digits}f}'
+    dims = [f'{show(dim["mean"])}（{dim["samples"]}）' for dim in (item['dimensions'][f] for f in FIELDS)]
+    repeats = '、'.join(f'{case} {v["scored"]}/{v["attempts"]}' for case, v in item['repeats'].items())
+    return [item['export'], f'{item["slot"]} · {item["reviewer"]}', item['product'], item['suite'] or '—',
+            show(item['total']), str(item['samples']), str(item['unfinished']), str(item['unscored']), *dims, repeats]
 
 
 def totals_markdown(items):
     if not items: return ''
-    show = lambda v, digits=2: '—' if v is None else f'{v:.{digits}f}'
-    lines = ['', '## 评审总分', '',
-             '每题先按轮平均各维度，再平均该题有分数的维度；同一题组内各题等权，乘以20换算为百分制。Advanced5与Challenge3分行计算，不合并。留空不计，未完成全部轮次的样本不计入。'
-             '每位评审单独一行，不合并、不平均；总分不代表任务完成度，评审之间的差异见逐轮结果。', '',
-             '| 导出 | 评审 | 配置 | 题组 | 总分 / 100 | 计分题数 | 未完成 | 事实（题数） | 指令（题数） | 实用性（题数） |', '|---|---|---|---|---:|---:|---:|---:|---:|---:|']
-    for x in items:
-        dims = ' | '.join(f'{show(x["dimensions"][f]["mean"])}（{x["dimensions"][f]["samples"]}）' for f in FIELDS)
-        lines.append(f'| {x["export"]} | {x["slot"]} · {x["reviewer"]} | {x["product"]} | {x["suite"] or "—"} | {show(x["total"])} | {x["samples"]} | {x["unfinished"]} | {dims} |')
+    lines = ['', '## 评审总分', '', TOTAL_DESCRIPTION, '', '| ' + ' | '.join(TOTAL_HEADERS) + ' |',
+             '|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|']
+    lines.extend('| ' + ' | '.join(total_cells(item)) + ' |' for item in items)
     return '\n'.join(lines) + '\n'
 
 
@@ -509,6 +545,7 @@ def rows(folder, records):
         name = binding_file.name[:-len('-BINDING.json')]
         try:
             packet, mapping, sheets, invalid = bound_sheets(folder, name, by_job)
+            accepted = accepted_slots(sheets)
             for reviewer, message in invalid:
                 output.append([name, reviewer, '', '', '', '', '', '', '', '评分无效：'+message])
             for i, sample in enumerate(packet['samples']):
@@ -523,7 +560,7 @@ def rows(folder, records):
                     status = '单评，未复核'
                     if 'r1' in marks and 'r2' in marks:
                         status = '两评一致（未证明语义正确）' if marks['r1'] == marks['r2'] else '有分歧，待裁决'
-                        if 'adjudicated' in marks: status = '已裁决，保留双评分'
+                        if 'adjudicated' in accepted: status = '已裁决，保留双评分'
                     elif 'adjudicated' in marks: status = '裁决缺少完整双评，不采纳'
                     stage = '初始' if turn['number'] == 1 else '中间'
                     if cov['final_available'] and turn['number'] == cov['planned_turns']: stage += '/最终'

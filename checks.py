@@ -1,10 +1,12 @@
 """Text constraints shared by the v2 study runner and its checks."""
+import json
 import re
+from decimal import Decimal
 from html.parser import HTMLParser
 
 PRODUCTS = ('dsh', 'chatgpt', 'hermes')
 KINDS = ('contains', 'dates', 'length', 'paragraphs', 'paragraph', 'no_heading', 'preserve',
-         'exact', 'json', 'excludes', 'sentences')
+         'exact', 'json', 'excludes', 'sentences', 'final_amount', 'no_money')
 
 FULL_DATE = re.compile(r'(?<!\d)(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})(?!\d)')
 MONTH_DAY = re.compile(r'(?<!\d)(\d{1,2})\s*月\s*(\d{1,2})(?!\d)')
@@ -131,6 +133,27 @@ def check_dates(text, values):
     return False, '缺少：' + ', '.join(missing)
 
 SENTENCE_END = re.compile(r'[。！？!?]+')
+CHINESE_MONEY_DIGITS = '零〇一二两三四五六七八九十百千万亿'
+MONEY_NUMBER = rf'(?:[0-9０-９]+(?:[.,，．][0-9０-９]+)*[万亿]?|[{CHINESE_MONEY_DIGITS}]+)'
+MONEY = re.compile(rf'(?:[¥￥$＄€£]|人民币)\s*{MONEY_NUMBER}|'
+                   rf'{MONEY_NUMBER}\s*(?:块(?:钱)?|元(?![旦素件气首音老])|美元|欧元|英镑)')
+FINAL_AMOUNT = re.compile(rf'(?:^|[。！？；;\n，,])\s*(?:(?:所以|因此)[，,]?\s*)?'
+                          rf'(?P<explicit>(?:最终|合计|总共)?(?:实付|应付|支付|付)(?:金额)?|最终|总计)?'
+                          rf'\s*[:：为是]?\s*(?:[¥￥]|人民币)?\s*(?P<amount>{MONEY_NUMBER})'
+                          rf'\s*(?:元|块钱|块)?\s*[。！？.!?]?\s*$')
+
+
+def strict_json(text):
+    def unique(pairs):
+        result = dict(pairs)
+        if len(result) != len(pairs):
+            raise ValueError('重复键')
+        return result
+
+    def reject_constant(value):
+        raise ValueError('非 JSON 数值 ' + value)
+
+    return json.loads(text, object_pairs_hook=unique, parse_constant=reject_constant)
 
 def sentences(text):
     """Sentences ended by Chinese or Western terminal punctuation; trailing text without one also counts."""
@@ -180,21 +203,44 @@ def check(text, rules, earlier):
             results.append({'check': rule.get('label', '回答与指定值一致'), 'pass': text.strip() == rule['value'],
                             'detail': '去掉首尾空白后整条回复须等于 ' + repr(rule['value']) + '；附加任何说明都判不一致'})
         elif kind == 'json':
-            import json
+            passed = False
             try:
-                parsed = json.loads(text.strip())
+                parsed = strict_json(text)
                 if 'keys' in rule:
                     problem = None if isinstance(parsed, dict) and set(parsed) == set(rule['keys']) else '不是只含指定键的JSON对象'
+                elif rule.get('require_schema') and (not isinstance(parsed, dict) or set(parsed) != set(rule['value'])):
+                    problem = '先按格式检查判定对象与键，内容另由评审核对'
+                    passed = None
                 else:
                     problem = None if parsed == rule['value'] else '键或值与预期不同'
-            except ValueError:
-                problem = '整条回复不是可解析的JSON（代码围栏或前后说明也会导致失败）'
-            results.append({'check': rule.get('label', 'JSON与预期一致'), 'pass': problem is None,
-                            'detail': (problem or '解析结果与预期对象完全相同') + '；键顺序不限，数字与字符串类型须一致'})
+            except ValueError as error:
+                problem = '整条回复不是有效的JSON：' + str(error)
+                if rule.get('require_schema'):
+                    passed = None
+            if problem is None:
+                passed = True
+            results.append({'check': rule.get('label', 'JSON与预期一致'), 'pass': passed,
+                            'detail': problem or '键顺序不限，解析后的键或内容符合预期'})
         elif kind == 'excludes':
             found = [x for x in rule['values'] if x in text]
             results.append({'check': rule.get('label', '不含指定文本'), 'pass': not found,
                             'detail': '出现：' + ', '.join(found) if found else '均未出现；只做字面匹配，换说法需人工确认'})
+        elif kind == 'final_amount':
+            raw = normalize(text).strip().translate(str.maketrans('０１２３４５６７８９．，', '0123456789.,'))
+            match = FINAL_AMOUNT.search(raw)
+            passed = None
+            if match and (match['explicit'] or match.start() == 0):
+                amount = match['amount']
+                if re.fullmatch(r'[0-9]+(?:\.[0-9]+)?', amount):
+                    passed = Decimal(amount) == rule['value']
+                elif amount in rule['spellings']:
+                    passed = True
+            results.append({'check': rule['label'], 'pass': passed,
+                            'detail': '仅核对可明确识别的最终金额；其他表达交由评审判断'})
+        elif kind == 'no_money':
+            found = MONEY.search(text)
+            results.append({'check': rule['label'], 'pass': found is None,
+                            'detail': '发现货币金额：' + found[0] if found else '未匹配常见货币金额写法'})
         elif kind == 'sentences':
             count = len(sentences(text))
             results.append({'check': rule.get('label', '句数'), 'pass': count == rule['count'],

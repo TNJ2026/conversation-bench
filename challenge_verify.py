@@ -1,20 +1,29 @@
 """Check recorded challenge artifacts; with --regress, also run the hidden repair tests.
 
 Plain mode only reads records. --regress executes the submitted allocation.py against
-challenge_repair_hidden.py in a throwaway directory and stores the outcome in the record,
-so export can link it to the repair requirement. That directory is not a sandbox: run
---regress only where executing the tested model's code is acceptable.
+challenge_repair_hidden.py in an OS sandbox and stores the outcome in the record
+so export can link it to the repair requirement.
 """
 import argparse
 import csv
 import io
 import hashlib
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
+import sysconfig
 import tempfile
+
+from checks import strict_json
+
+CHECK_LABELS = {
+    'file_scope': '文件范围（challenge_verify）',
+    'dispatch_rows': 'dispatch.csv内容（challenge_verify）',
+    'routing': 'routing.json仅改kiosk（challenge_verify）',
+    'dispatch_kept': 'dispatch.csv未被改动（challenge_verify）',
+    'snapshot_complete': '快照完整（challenge_verify）',
+}
 
 EXPECTED_DISPATCH = [
     ['id', 'mode', 'status'], ['kiosk', 'pickup', 'ready'], ['frontdesk', 'pickup', 'ready'],
@@ -24,15 +33,6 @@ EXPECTED_DISPATCH = [
 
 def csv_rows(artifacts, name):
     return list(csv.reader(io.StringIO(artifacts.get(name, '')), strict=True))
-
-
-def json_object(artifacts, name):
-    def unique(items):
-        result = dict(items)
-        if len(result) != len(items):
-            raise ValueError('duplicate JSON key')
-        return result
-    return json.loads(artifacts.get(name, ''), object_pairs_hook=unique)
 
 
 def csv_matches(artifacts, name, expected, ordered=True):
@@ -79,7 +79,7 @@ def verify(record):
                 expected = json.loads(record['case']['fixtures']['routing.json'])
                 expected['routes'][0]['mode'] = 'courier'
                 try:
-                    checks['routing'] = json_object(artifacts, 'routing.json') == expected
+                    checks['routing'] = strict_json(artifacts.get('routing.json', '')) == expected
                 except ValueError:
                     checks['routing'] = False
                 checks['dispatch_kept'] = (None if previous is None else 'dispatch.csv' in previous
@@ -96,6 +96,43 @@ def verify(record):
 HIDDEN = Path(__file__).with_name('challenge_repair_hidden.py')
 REPAIR_CASE = 'adv-repair-receipt-replay'
 REGRESSION_CHECK = '未公开回归测试（challenge_repair_hidden）'
+SANDBOX_EXEC = Path('/usr/bin/sandbox-exec')
+BOOTSTRAP = """import os, resource, runpy, sys, unittest
+resource.setrlimit(resource.RLIMIT_FSIZE, (262144, 262144))
+sys.path.insert(0, os.getcwd())
+print('review sandbox ready', flush=True)
+suite = unittest.TestSuite()
+namespace = runpy.run_path('challenge_repair_hidden.py')
+for item in namespace.values():
+    if isinstance(item, type) and issubclass(item, unittest.TestCase):
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(item))
+result = unittest.TextTestRunner(verbosity=2).run(suite)
+print('review tests finished', flush=True)
+sys.exit(0 if result.testsRun and result.wasSuccessful() else 1)
+"""
+
+
+def sandbox_command(directory):
+    if sys.platform != 'darwin' or not SANDBOX_EXEC.is_file():
+        return None
+    python = Path(sys.executable).resolve()
+    libraries = {Path(sysconfig.get_path(kind)).resolve() for kind in ('stdlib', 'platstdlib')}
+    read_dirs = [directory, *sorted(libraries), Path('/usr/lib'), Path('/System/Library')]
+    library_parents = {library.parent for library in libraries}
+    shared_library = sysconfig.get_config_var('LDLIBRARY')
+    libdir = sysconfig.get_config_var('LIBDIR')
+    read_files = {Path('/'), python, python.parent, *library_parents}
+    if shared_library and libdir:
+        read_files.add((Path(libdir) / shared_library).resolve())
+
+    literals = ' '.join(f'(literal {json.dumps(str(path))})' for path in sorted(read_files))
+    subpaths = ' '.join(f'(subpath {json.dumps(str(path))})' for path in read_dirs)
+    profile = (
+        '(version 1) (deny default) (allow file-read-metadata) (allow sysctl-read) '
+        f'(allow process-exec (literal {json.dumps(str(python))})) '
+        f'(allow file-read-data {literals} {subpaths})'
+    )
+    return [str(SANDBOX_EXEC), '-p', profile, str(python), '-I', '-B', '-S', '-c', BOOTSTRAP]
 
 
 def regress(record, timeout=60):
@@ -108,19 +145,33 @@ def regress(record, timeout=60):
     base = dict(turn=1, hidden_sha256=hashlib.sha256(hidden.encode()).hexdigest())
     if source is None:
         return dict(base, **{'pass': False}, summary='第1轮快照中没有 allocation.py')
-    with tempfile.TemporaryDirectory(prefix='challenge-regress-') as directory:
-        Path(directory, 'allocation.py').write_text(source, encoding='utf-8')
-        Path(directory, 'challenge_repair_hidden.py').write_text(hidden, encoding='utf-8')
-        env = {'PATH': os.environ.get('PATH', ''), 'PYTHONDONTWRITEBYTECODE': '1', 'HOME': directory}
+    with tempfile.TemporaryDirectory(prefix='challenge-regress-') as temporary:
+        directory = Path(temporary).resolve()
+        command = sandbox_command(directory)
+        if command is None:
+            return dict(base, **{'pass': None}, summary='缺少受支持的评审沙箱（macOS sandbox-exec）')
+        (directory / 'allocation.py').write_text(source, encoding='utf-8')
+        (directory / 'challenge_repair_hidden.py').write_text(hidden, encoding='utf-8')
         try:
-            done = subprocess.run([sys.executable, '-B', '-E', '-s', 'challenge_repair_hidden.py'], cwd=directory, env=env,
-                                  capture_output=True, text=True, timeout=timeout)
+            with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+                done = subprocess.run(command, cwd=directory, env={'HOME': str(directory)}, stdin=subprocess.DEVNULL,
+                                      stdout=stdout, stderr=stderr, timeout=timeout)
+                stdout.seek(0)
+                stderr.seek(0)
+                output = stdout.read(262144).decode('utf-8', errors='replace').splitlines()
+                errors = stderr.read(262144).decode('utf-8', errors='replace')
         except subprocess.TimeoutExpired:
             return dict(base, **{'pass': False}, summary=f'超过 {timeout} 秒未结束')
-    lines = [x for x in done.stderr.strip().splitlines() if x.strip()]
+        except OSError as error:
+            return dict(base, **{'pass': None}, summary=f'评审沙箱启动失败：{error}')
+    if not output or output[0] != 'review sandbox ready':
+        return dict(base, **{'pass': None}, summary='评审沙箱未完成初始化')
+    lines = [x for x in errors.strip().splitlines() if x.strip()]
     tail = lines[-1] if lines else ''
     failed = [x for x in lines if x.startswith(('FAIL:', 'ERROR:'))]
-    return dict(base, **{'pass': done.returncode == 0}, summary=tail + ('；' + '；'.join(failed) if failed else ''))
+    passed = done.returncode == 0 and 'review tests finished' in output
+    summary = tail + ('；' + '；'.join(failed) if failed else '')
+    return dict(base, **{'pass': passed}, summary=summary or '回归测试未完整执行')
 
 
 def main():

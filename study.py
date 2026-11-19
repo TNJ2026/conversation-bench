@@ -606,11 +606,8 @@ def report(args):
                       table(['导出目录','样本','应用','完成情况','轮次/评审','事实准确性','指令遵守','实用性','复核状态','逐维依据'],reviewed_v3))
     totals = review_v3.totals(path.parent, records)
     if totals:
-        show = lambda v: '—' if v is None else f'{v:.2f}'
-        chunks.append('<h2>评审总分</h2><p>每题先按轮平均各维度，再平均该题有分数的维度；同一题组内各题等权，乘以20换算为百分制。Advanced5与Challenge3分行计算，不合并。留空不计，未完成全部轮次的样本不计入。每位评审单独一行，不合并、不平均；总分不代表任务完成度。</p>' +
-                      table(['导出目录','评审','应用','题组','总分/100','计分题数','未完成','事实准确性（题数）','指令遵守（题数）','实用性（题数）'],
-                            [[x['export'], x['slot']+' · '+x['reviewer'], x['product'], x['suite'] or '—', show(x['total']), x['samples'], x['unfinished'],
-                              *[f'{show(x["dimensions"][f]["mean"])}（{x["dimensions"][f]["samples"]}）' for f in review_v3.FIELDS]] for x in totals]))
+        chunks.append('<h2>评审总分</h2><p>' + e(review_v3.TOTAL_DESCRIPTION) + '</p>' +
+                      table(review_v3.TOTAL_HEADERS, map(review_v3.total_cells, totals)))
     chunks.append('<h2>各轮证据及观测指标</h2>')
     for r in records:
         scores=r.get('scores'); verdicts=''
