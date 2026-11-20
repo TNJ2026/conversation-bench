@@ -7,16 +7,17 @@ export can link it to the repair requirement.
 """
 import argparse
 import csv
-import io
 import hashlib
 import json
 from pathlib import Path
+import random
+import secrets
 import subprocess
 import sys
 import sysconfig
 import tempfile
 
-from checks import strict_json
+from checks import csv_data_rows, strict_json
 
 CHECK_LABELS = {
     'file_scope': '文件范围（challenge_verify）',
@@ -32,15 +33,8 @@ EXPECTED_DISPATCH = [
 ]
 
 
-def csv_rows(artifacts, name):
-    """Parsed rows with a leading BOM, blank lines and cell padding ignored, like study.expect_csv."""
-    text = artifacts.get(name, '').lstrip('\ufeff')
-    return [[cell.strip() for cell in row] for row in csv.reader(io.StringIO(text), strict=True)
-            if any(cell.strip() for cell in row)]
-
-
 def csv_matches(artifacts, name, expected, ordered=True):
-    rows = csv_rows(artifacts, name)
+    rows = csv_data_rows(artifacts.get(name, ''))
     if ordered or not rows:
         return rows == expected
     return rows[0] == expected[0] and sorted(rows[1:]) == sorted(expected[1:])
@@ -107,6 +101,7 @@ BOOTSTRAP = """import io, json, os, resource, sys
 resource.setrlimit(resource.RLIMIT_FSIZE, (262144, 262144))
 request = json.loads(sys.stdin.read())
 sys.path.insert(0, os.getcwd())
+print('READY-' + request['nonce'], flush=True)
 def encode(value):
     if not isinstance(value, dict):
         return dict(kind='bad', detail='replay did not return a dict')
@@ -124,22 +119,23 @@ else:
         outcome = []
         for call in scenario['calls']:
             initial = {tuple(k): v for *k, v in call['initial']}
-            before = json.dumps(call['initial'])
+            rows = None
+            rows_before = None
             try:
                 if call['csv'] is not None:
                     rows = allocation.read_receipts(io.StringIO(call['csv']))
                 else:
                     rows = call['receipts']
-                    rows_before = json.dumps(rows, sort_keys=True)
+                rows_before = json.dumps(rows, sort_keys=True)
                 result = encode(allocation.replay(initial, rows))
-                if json.dumps(sorted([list(k) + [v] for k, v in initial.items()], key=repr)) != json.dumps(sorted(call['initial'], key=repr)):
-                    result = dict(kind='bad', detail='initial balances were modified')
-                elif call['csv'] is None and json.dumps(rows, sort_keys=True) != rows_before:
-                    result = dict(kind='bad', detail='receipt rows were modified')
             except ValueError:
                 result = dict(kind='error', detail='ValueError')
             except Exception as error:
                 result = dict(kind='crash', detail=type(error).__name__)
+            if json.dumps(sorted([list(k) + [v] for k, v in initial.items()], key=repr)) != json.dumps(sorted(call['initial'], key=repr)):
+                result = dict(kind='bad', detail='initial balances were modified')
+            elif rows_before is not None and json.dumps(rows, sort_keys=True) != rows_before:
+                result = dict(kind='bad', detail='receipt rows were modified')
             outcome.append(result)
         results.append(outcome)
 sys.stdout.write('\\n' + request['nonce'] + json.dumps(results) + '\\n')
@@ -182,7 +178,7 @@ def sandbox_command(directory):
     return [str(SANDBOX_EXEC), '-p', profile, str(python), '-I', '-B', '-S', '-c', BOOTSTRAP]
 
 
-def regress(record, timeout=60):
+def regress(record, timeout=60, *, seed=None):
     """Run randomized hidden scenarios against the turn-1 allocation.py; None when there is nothing to test.
 
     The submission only ever sees scenario inputs. Its raw results are compared with the
@@ -190,7 +186,6 @@ def regress(record, timeout=60):
     exiting early or patching unittest inside the sandbox cannot produce a pass.
     """
     import challenge_repair_hidden as hidden_module
-    import secrets
     turns = record.get('turns') or []
     if record['case']['id'] != REPAIR_CASE or not turns:
         return None
@@ -199,30 +194,41 @@ def regress(record, timeout=60):
     base = dict(turn=1, hidden_sha256=hashlib.sha256(hidden.encode()).hexdigest())
     if source is None:
         return dict(base, **{'pass': False}, summary='第1轮快照中没有 allocation.py')
-    cases = hidden_module.scenarios()
+    seed = secrets.randbits(64) if seed is None else seed
+    cases = hidden_module.scenarios(random.Random(seed))
     nonce = 'RESULT-' + secrets.token_hex(16) + ':'
-    request = json.dumps(dict(nonce=nonce, scenarios=[dict(name=name, calls=wire(calls)) for name, calls in cases]))
+    inputs = [dict(name=name, calls=wire(calls)) for name, calls in cases]
+    base.update(seed=seed, inputs_sha256=hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest())
+    request = json.dumps(dict(nonce=nonce, scenarios=inputs))
     with tempfile.TemporaryDirectory(prefix='challenge-regress-') as temporary:
         directory = Path(temporary).resolve()
         command = sandbox_command(directory)
         if command is None:
             return dict(base, **{'pass': None}, summary='缺少受支持的评审沙箱（macOS sandbox-exec）')
-        (directory / 'allocation.py').write_text(source, encoding='utf-8')
         try:
+            (directory / 'allocation.py').write_text(source, encoding='utf-8')
             with tempfile.TemporaryFile() as stdin, tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
                 stdin.write(request.encode()); stdin.seek(0)
-                subprocess.run(command, cwd=directory, env={'HOME': str(directory)}, stdin=stdin,
-                               stdout=stdout, stderr=stderr, timeout=timeout)
+                try:
+                    completed = subprocess.run(command, cwd=directory, env={'HOME': str(directory)}, stdin=stdin,
+                                               stdout=stdout, stderr=stderr, timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    completed = None
                 stdout.seek(0)
-                output = stdout.read(1048576).decode('utf-8', errors='replace')
-        except subprocess.TimeoutExpired:
-            return dict(base, **{'pass': False}, summary=f'超过 {timeout} 秒未结束')
+                output = stdout.read(262144).decode('utf-8', errors='replace').splitlines()
         except OSError as error:
             return dict(base, **{'pass': None}, summary=f'评审沙箱启动失败：{error}')
-    reports = [line[len(nonce):] for line in output.splitlines() if line.startswith(nonce)]
+    if not output or output[0] != 'READY-' + nonce:
+        status = f'退出码 {completed.returncode}' if completed is not None else f'超过 {timeout} 秒'
+        return dict(base, **{'pass': None}, summary=f'评审沙箱未完成初始化（{status}）')
+    if completed is None:
+        return dict(base, **{'pass': False}, summary=f'回归执行超过 {timeout} 秒未结束')
+    if completed.returncode != 0:
+        return dict(base, **{'pass': False}, summary=f'被测回归进程异常退出（退出码 {completed.returncode}）')
+    reports = [line[len(nonce):] for line in output[1:] if line.startswith(nonce)]
     try:
         results = json.loads(reports[-1]) if reports else None
-    except ValueError:
+    except (ValueError, RecursionError):
         results = None
     if not isinstance(results, list):
         return dict(base, **{'pass': False}, summary='沙箱内没有返回可解析的运行结果（被测代码崩溃、提前退出或截断了输出）')
@@ -234,7 +240,7 @@ def regress(record, timeout=60):
             failed.append(name)
     total = len(cases)
     summary = (f'{total - len(failed)}/{total} 个场景与参考实现一致' +
-               ('；不一致：' + '、'.join(failed) if failed else '') + '；输入每次随机生成，判定在沙箱外完成')
+               ('；不一致：' + '、'.join(failed) if failed else '') + '；判定在沙箱外完成')
     return dict(base, **{'pass': not failed}, summary=summary)
 
 
@@ -243,12 +249,18 @@ def main():
     parser.add_argument('--study', required=True, type=Path)
     parser.add_argument('--regress', action='store_true',
                         help='执行被测 allocation.py 与未公开回归测试，并把结果写回记录（会运行被测代码）')
+    parser.add_argument('--seed', type=int, help='复跑指定的回归输入；省略时为本批次随机生成一个种子')
     args = parser.parse_args()
+    if args.seed is not None and not args.regress:
+        parser.error('--seed requires --regress')
+    seed = secrets.randbits(64) if args.regress and args.seed is None else args.seed
     records = []
     for path in sorted((args.study / 'records').glob('J*.json')):
         record = json.loads(path.read_text(encoding='utf-8'))
+        if record['case'].get('suite') != 'v3-challenge3':
+            continue
         if args.regress and record['case']['id'] == REPAIR_CASE and record.get('status') == 'completed':
-            outcome = regress(record)
+            outcome = regress(record, seed=seed)
             if outcome is not None and outcome['pass'] is None:
                 print(f'{record["job"]}: 回归未执行，结果记为待定（{outcome["summary"]}）；R2 不受约束，需人工判断',
                       file=sys.stderr)
@@ -259,7 +271,7 @@ def main():
         records.append({'job': record['job'], 'case': record['case']['id'], 'checks': verify(record),
                         'hidden_regression': record.get('hidden_regression')})
     if not records:
-        parser.error('study has no records')
+        parser.error('study has no Challenge3 records')
     print(json.dumps(records, ensure_ascii=False, indent=2))
 
 

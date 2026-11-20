@@ -4,7 +4,9 @@ import copy
 import io
 import json
 from pathlib import Path
+import random
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -158,7 +160,7 @@ class PacketTests(unittest.TestCase):
 class CatalogTests(unittest.TestCase):
     def test_active_catalog_has_well_formed_requirements(self):
         cases = study.load_catalog(study.DEFAULT_SUITE)
-        self.assertEqual(len(cases), 8)
+        self.assertEqual(len(cases), 10)
         self.assertTrue(all(c['category'] != 'interrupt' for c in cases))
         for c in cases:
             for r in c['evaluation']['requirements']:
@@ -174,10 +176,10 @@ class CatalogTests(unittest.TestCase):
             del config.suite
             study.create(config)
             plan=study.load(path)
-            self.assertEqual(plan['suite'],'v3-combined8')
+            self.assertEqual(plan['suite'],'v3-combined10')
             self.assertEqual(plan['version'],3)
             cases = {case['id']: case for case in study.load_catalog(study.DEFAULT_SUITE)}
-            self.assertEqual(len(plan['jobs']),8)
+            self.assertEqual(len(plan['jobs']),10)
             self.assertEqual({job['case']['id']: job['case_hash'] for job in plan['jobs']},
                              {case_id: study.digest(case) for case_id, case in cases.items()})
 
@@ -221,8 +223,13 @@ class Guard4Tests(unittest.TestCase):
         self.assertEqual((len(old), len(new)), (8, 11))
         self.assertNotIn('adv-room-reassignment', new)
         self.assertEqual(set(new) - set(old), set(self.cases()))
-        self.assertEqual(study.DEFAULT_SUITE, 'v3-combined8')
         self.assertEqual(sum(len(c['turns']) for c in study.load_catalog('v3-combined11')), 26)
+
+    def test_combined10_only_drops_shipment_from_combined11(self):
+        old = study.load_catalog('v3-combined11')
+        current = study.load_catalog(study.DEFAULT_SUITE)
+        self.assertEqual(current, [c for c in old if c['id'] != 'adv-shipment-update'])
+        self.assertEqual(sum(len(c['turns']) for c in current), 23)
 
     def test_every_guard_requirement_is_well_formed_and_links_real_checks(self):
         for c in self.cases().values():
@@ -270,10 +277,10 @@ class Guard4Tests(unittest.TestCase):
         too_many = self.check('guard-stacked-format', 1, reminder + '预算4500元。')
         self.assertEqual((too_many['恰好两句'], too_many['不含金额']), (False, False))
         self.assertTrue(self.check('guard-stacked-format', 1, '冬季读书周共39人。欢迎分享多元阅读心得。')['不含金额'])
-        for price in ('十九块钱', '￥180', '49.50 元', '20美元', '20块'):
+        for price in ('十九块钱', '￥180', '49.50 元', '20美元', '20块钱'):
             self.assertFalse(self.check('guard-stacked-format', 1, f'冬季读书周共39人。请准备{price}。')['不含金额'])
-        # Chinese numerals with 元/块 collide with ordinary words; never a hard failure.
-        for phrase in ('欢迎大家一块来读书', '我们分三块讨论', '一元复始，欢迎参加', '请准备十九元'):
+        for phrase in ('欢迎大家一块来读书', '我们分三块讨论', '一元复始，欢迎参加', '请准备十九元',
+                       '请提前阅读这2块内容', '欢迎阅读包含2元组的例子', '请准备20块'):
             self.assertIsNone(self.check('guard-stacked-format', 1, f'冬季读书周共39人。{phrase}。')['不含金额'])
         later = self.check('guard-stacked-format', 2, reminder + '负责人确定后另行通知。')
         self.assertEqual(set(later.values()), {True})
@@ -435,9 +442,16 @@ assert blocked(os.fork)
         self.assertIs(challenge_verify.regress(self.repair_record('def replay(:\n'))['pass'], False)
 
     def test_scenarios_are_randomized_and_reference_agrees_with_contract(self):
+        import csv
         import challenge_repair_hidden as hidden
-        first, second = hidden.scenarios(), hidden.scenarios()
+        first, second = hidden.scenarios(random.Random(19)), hidden.scenarios(random.Random(29))
         self.assertNotEqual(first, second)
+        self.assertEqual(first, hidden.scenarios(random.Random(19)))
+        for seed in range(24):
+            cases = dict(hidden.scenarios(random.Random(seed)))
+            rows = list(csv.DictReader(cases['same_quantity_is_not_identity'][0][1].splitlines()))
+            for field in ('receipt', 'order', 'sku'):
+                self.assertEqual(len({row[field] for row in rows}), 2)
         outcomes = dict((name, hidden.expected(calls)) for name, calls in first)
         self.assertEqual(outcomes['conflicting_quantity'], [('error', 'ValueError')])
         self.assertEqual(outcomes['non_adjacent_conflict'], [('error', 'ValueError')])
@@ -454,17 +468,66 @@ assert blocked(os.fork)
             self.assertIsNone(challenge_verify.regress(self.repair_record(self.FIXED))['pass'])
             run.assert_not_called()
 
+    def test_sandbox_exit_before_initialization_is_pending(self):
+        import challenge_verify
+        failed_launch = [sys.executable, '-I', '-c', 'raise SystemExit(78)']
+        with patch.object(challenge_verify, 'sandbox_command', return_value=failed_launch):
+            outcome = challenge_verify.regress(self.repair_record(self.FIXED), seed=19)
+        self.assertIsNone(outcome['pass'])
+        self.assertIn('评审沙箱未完成初始化（退出码 78）', outcome['summary'])
+
+    def test_regression_rejects_input_mutation_on_conflict_and_after_csv_parse(self):
+        import challenge_verify
+        if challenge_verify.sandbox_command(self.folder) is None:
+            self.skipTest('macOS review sandbox not available')
+        for mutation, case in (
+            (self.FIXED.replace('if seen[k] != r["quantity"]: raise ValueError(k)',
+                                'if seen[k] != r["quantity"]:\n                initial.clear()\n                raise ValueError(k)'),
+             'non_adjacent_conflict'),
+            (self.FIXED.replace('if seen[k] != r["quantity"]: raise ValueError(k)',
+                                'if seen[k] != r["quantity"]:\n                r["quantity"] = 0\n                raise ValueError(k)'),
+             'conflicting_quantity'),
+            (self.FIXED.replace('    return balances', '    if len(receipts) == 4: receipts.pop()\n    return balances'),
+             'same_quantity_is_not_identity'),
+        ):
+            with self.subTest(case=case):
+                outcome = challenge_verify.regress(self.repair_record(mutation), seed=19)
+                self.assertIs(outcome['pass'], False)
+                self.assertIn(case, outcome['summary'])
+
+    def test_regression_seed_reproduces_input_hash(self):
+        import challenge_verify
+        with patch.object(challenge_verify, 'sandbox_command', return_value=None):
+            first = challenge_verify.regress(self.repair_record(self.FIXED), seed=19)
+            replay = challenge_verify.regress(self.repair_record(self.FIXED), seed=first['seed'])
+            different = challenge_verify.regress(self.repair_record(self.FIXED), seed=29)
+        self.assertEqual(first['inputs_sha256'], replay['inputs_sha256'])
+        self.assertNotEqual(first['inputs_sha256'], different['inputs_sha256'])
+
+    def test_challenge_check_cli_accepts_combined_study(self):
+        import challenge_verify
+        records = self.folder/'records'
+        records.mkdir()
+        study.save(records/'J0001.json', self.guard_record('2026-12-03；320'))
+        repair = self.repair_record(self.FIXED)
+        study.save(records/'J0002.json', repair)
+        result = subprocess.check_output([sys.executable, challenge_verify.__file__, '--study', str(self.folder)])
+        self.assertEqual([row['case'] for row in json.loads(result)], [challenge_verify.REPAIR_CASE])
+
     def test_dispatch_rows_ignore_layout_but_not_content(self):
         import challenge_verify as cv
         good = 'id,mode,status\nkiosk,pickup,ready\nfrontdesk,pickup,ready\nnight,after_hours,blocked\ncourier,courier,ready\n'
         for text in (good, good + '\n\n', good.replace('\n', '\r\n'), good.replace(',', ', '), '\ufeff' + good):
             self.assertTrue(cv.csv_matches({'dispatch.csv': text}, 'dispatch.csv', cv.EXPECTED_DISPATCH, ordered=False), repr(text))
-        for text in (good.replace('blocked', 'ready'), good.replace('after_hours', 'courier'), good.replace('courier,courier,ready\n', '')):
+        for text in (good.replace('blocked', 'ready'), good.replace('after_hours', 'courier'),
+                     good.replace('courier,courier,ready\n', ''), good + ',,\n', good + '"","",""\n'):
             self.assertFalse(cv.csv_matches({'dispatch.csv': text}, 'dispatch.csv', cv.EXPECTED_DISPATCH, ordered=False), repr(text))
         spec = next(x for x in study.load_catalog('v3-advanced5') if x['id'] == 'adv-approved-picklist')['turns'][0]
         picklist = '\ufefforder,item,allocated,backorder\n\nA01,贴纸,4,0\nA02,笔,3,0\nA03,贴纸,2,4\nA04,笔,2,2\n\n'
         row = next(r for r in study.artifact_checks(spec, {}, {}, {'picklist.csv': picklist}) if r['check'] == 'picklist.csv内容正确')
         self.assertTrue(row['pass'])
+        extra = study.artifact_checks(spec, {}, {}, {'picklist.csv': picklist + ',,,\n'})
+        self.assertFalse(next(r for r in extra if r['check'] == 'picklist.csv内容正确')['pass'])
 
     def test_routing_failure_is_linked_to_each_affected_requirement(self):
         from challenge_verify import CHECK_LABELS
@@ -547,7 +610,7 @@ class CatalogLogicTests(unittest.TestCase):
         self.assertTrue(all(t['checks'][0]['pass'] for t in sample['turns']))
         changed = dict(record, turns=[dict(record['turns'][0], files={'policy.txt': 'b'})] + record['turns'][1:])
         self.assertFalse(review.sample_of(changed, 'P001-A')['turns'][0]['checks'][0]['pass'])
-        other = self.cases()['adv-room-reassignment']
+        other = self.cases()['adv-approved-picklist']
         plain = dict(record, case=other, turns=[dict(prompt=t['prompt'], answer='x', checks=[], files={}, artifacts={}) for t in other['turns']])
         self.assertTrue(all(t['checks'] == [] for t in review.sample_of(plain, 'P001-A')['turns']))
 

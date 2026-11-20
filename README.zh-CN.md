@@ -4,21 +4,21 @@
 
 [中文](README.zh-CN.md) | [English](README.md)
 
-Python 3.9+，无第三方依赖。新版入口为 `study.py`。支持 DeepSeek Harness（`dsh`）、ChatGPT（`chatgpt`）和 Hermes（`hermes`）。默认题库 `v3-combined8` 合并 Advanced5 和 Challenge3，共 8 题、19 轮。默认两款应用共 16 次会话，单款 8 次，三款 24 次。逐轮评分规则见[会话测试 V3](docs/conversation-evaluation-v3.md)。提供逐轮提示、独立材料目录、产物快照、协议分组、对照报告和匿名文本评审导出。短会话套件由操作员操作桌面应用，不模拟用户自答，也不自动点击应用或直接调用模型API。另有 `dshrun.py`、`codexrun.py`、`clauderun.py` 通过 DSH SDK、Codex CLI 或 Claude Code CLI 顺序执行同一套短会话题目。
+Python 3.9+，无第三方依赖。新版入口为 `study.py`。支持 DeepSeek Harness（`dsh`）、ChatGPT（`chatgpt`）和 Hermes（`hermes`）。默认题库 `v3-combined10` 合并 Advanced5 中的 3 题、Challenge3 的 3 题和 Guard4 的 4 题，共 10 题、23 轮。默认两款应用共 20 次会话，单款 10 次，三款 30 次。逐轮评分规则见[会话测试 V3](docs/conversation-evaluation-v3.md)。提供逐轮提示、独立材料目录、产物快照、协议分组、对照报告和匿名文本评审导出。短会话套件由操作员操作桌面应用，不模拟用户自答，也不自动点击应用或直接调用模型API。另有 `dshrun.py`、`codexrun.py`、`clauderun.py` 通过 DSH SDK、Codex CLI 或 Claude Code CLI 顺序执行同一套短会话题目。
 
-查看 [Advanced5 题组](docs/advanced5.md)或 [Challenge3 挑战题](docs/challenge3.md)。可用 `--suite v3-advanced5` 或 `--suite v3-challenge3` 单独运行子题组。新版 `--suite v3-combined11`（11 题、26 轮）去掉场地复核，补入 [Guard4 防守题](docs/guard4.md)（施压、文件注入、硬格式叠加、删除前确认）；默认值仍是 `v3-combined8`，旧计划不受影响。
+可用 `--suite` 选择 [Advanced5](docs/advanced5.md)、[Challenge3](docs/challenge3.md)或 [Guard4](docs/guard4.md) 单独运行。默认 10 题版从 11 题版移除了签收更新题。`v3-combined11` 和 `v3-combined8` 可显式选择。
 
 ## 加入 Hermes
 
 新建计划时用 `--products` 选择应用，逗号分隔；不填写时仍使用原来的 `dsh,chatgpt`。
 
 ```sh
-# 只测试 Hermes，共 8 次会话
+# 只测试 Hermes，共 10 次会话
 python3 study.py create --products hermes --output studies/hermes-desktop-1/plan.json
 python3 study.py next --plan studies/hermes-desktop-1/plan.json
-# DSH 与 Hermes 对照，共 16 次会话
+# DSH 与 Hermes 对照，共 20 次会话
 python3 study.py create --products dsh,hermes --output studies/dsh-hermes/plan.json
-# 三款同题对照，共 24 次会话
+# 三款同题对照，共 30 次会话
 python3 study.py create --products dsh,chatgpt,hermes --output studies/three-apps/plan.json
 ```
 
@@ -129,13 +129,13 @@ python3 study.py blind --plan studies/new-round/plan.json
 
 ```sh
 python3 study.py list
-# 默认 8 个案例，每款应用各一次，共 16 次会话
+# 默认 10 个案例，每款应用各一次，共 20 次会话
 python3 study.py create --output studies/another-round/plan.json --seed 73
 # 只复测出现差异的案例，每款应用追加两次
-python3 study.py create --cases adv-room-reassignment,adv-shipment-update \
+python3 study.py create --suite v3-advanced5 --cases adv-room-reassignment,adv-shipment-update \
   --repeat 2 --output studies/focused-retest/plan.json
 # 仅复测 Hermes 的这两个案例，各两次：4次会话
-python3 study.py create --products hermes --cases adv-room-reassignment,adv-shipment-update \
+python3 study.py create --suite v3-advanced5 --products hermes --cases adv-room-reassignment,adv-shipment-update \
   --repeat 2 --output studies/hermes-retest/plan.json
 ```
 
@@ -163,4 +163,4 @@ python3 -m unittest -v
 
 ## Codex CLI 批量运行
 
-新增 `codexrun.py`，支持指定多个模型与推理强度，默认使用合并的 8 题，全部可顺序自动执行。先 `prepare` 冻结计划，再 `run` 批量调用；每题独立会话，同题逐轮恢复，保存原始事件与失败记录。见[使用说明与隔离边界](docs/codex-cli-batch.md)。CLI逻辑分离不等于严格保密隔离，也不代表桌面端测试。
+新增 `codexrun.py`，支持指定多个模型与推理强度，默认使用合并的 10 题，全部可顺序自动执行。先 `prepare` 冻结计划，再 `run` 批量调用；每题独立会话，同题逐轮恢复，保存原始事件与失败记录。见[使用说明与隔离边界](docs/codex-cli-batch.md)。CLI逻辑分离不等于严格保密隔离，也不代表桌面端测试。

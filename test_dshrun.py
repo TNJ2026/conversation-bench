@@ -116,12 +116,12 @@ class BatchTests(unittest.TestCase):
             dshrun.execute(output)
 
     def test_default_suite_prepares_all_cases_without_timed_intervention(self):
-        output=self.root/'combined8'
+        output=self.root/'combined10'
         dshrun.prepare(Namespace(dsh=str(self.binary),model='fixture',provider='fixture',effort='medium',timeout=5,
             suite=study.DEFAULT_SUITE,profile_patch=None,cases=None,output=str(output)))
         plan=study.load(output/'plan.json')
-        self.assertEqual(len(plan['jobs']),8)
-        self.assertEqual(sum(len(j['case']['turns']) for j in plan['jobs']),19)
+        self.assertEqual(len(plan['jobs']),10)
+        self.assertEqual(sum(len(j['case']['turns']) for j in plan['jobs']),23)
         self.assertTrue(all(j['case']['category']!='interrupt' for j in plan['jobs']))
         self.assertEqual(study.digest(plan),study.load(output/'plan-binding.json')['sha256'])
 
@@ -129,7 +129,7 @@ class BatchTests(unittest.TestCase):
         overlay=self.root/'provider.yml';overlay.write_text('[]\n')
         output=self.root/'extended'
         dshrun.prepare(Namespace(dsh=str(self.binary),model='fixture',provider='fixture',effort='medium',timeout=5,
-            suite=study.DEFAULT_SUITE,profile_patch=str(overlay),cases='adv-room-reassignment',output=str(output)))
+            suite=study.DEFAULT_SUITE,profile_patch=str(overlay),cases='adv-authority-by-field',output=str(output)))
         overlay.write_text('changed after preparation')
         fixture=self.binary.read_text().replace("home=Path(os.environ['DSH_HOME'])",
             "assert '--patch' in sys.argv\nassert Path(sys.argv[sys.argv.index('--patch')+1]).read_text()=='[]\\n'\nhome=Path(os.environ['DSH_HOME'])")

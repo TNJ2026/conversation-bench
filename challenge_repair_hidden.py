@@ -34,10 +34,13 @@ def scenarios(rng=None):
     Values are random per run so expected balances cannot be precomputed by the submission.
     """
     rng = rng or random.SystemRandom()
-    token = lambda prefix: f'{prefix}{rng.randrange(10**5, 10**6)}'
+    def tokens(prefix, count):
+        return [f'{prefix}{number}' for number in rng.sample(range(10**5, 10**6), count)]
+
     qty = lambda: rng.randrange(2, 40)
-    order, other_order, sku, other_sku = token('O'), token('O'), token('S'), token('S')
-    r1, r2, r3 = token('R'), token('R'), token('R')
+    order, other_order = tokens('O', 2)
+    sku, other_sku = tokens('S', 2)
+    r1, r2, r3 = tokens('R', 3)
     q, q2 = qty(), qty()
     row = lambda receipt, o, s, n: dict(receipt=receipt, order=o, sku=s, quantity=n)
     opening = {(order, sku): qty(), (other_order, other_sku): qty()}
@@ -47,7 +50,7 @@ def scenarios(rng=None):
             f'{r1},{order},{sku},{q}\n{r2},{order},{sku},{q}\n{r1},{order},{other_sku},{q}\n{r1},{other_order},{sku},{q}\n')]),
         ('conflicting_quantity', [({}, [row(r1, order, sku, q), row(r1, order, sku, q + 1)])]),
         ('non_adjacent_retry', [({(order, sku): 1}, [row(r1, order, sku, q), row(r2, order, sku, q), row(r1, order, sku, q)])]),
-        ('non_adjacent_conflict', [({}, [row(r1, order, sku, q), row(r2, order, sku, q), row(r1, order, sku, q + 1)])]),
+        ('non_adjacent_conflict', [(opening, [row(r1, order, sku, q), row(r2, order, sku, q), row(r1, order, sku, q + 1)])]),
         ('state_does_not_leak_between_calls', [({}, [row(r3, order, sku, q2)] * 2), ({}, [row(r3, order, sku, q2)] * 2)]),
     ]
 

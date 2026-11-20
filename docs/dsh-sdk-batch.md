@@ -1,6 +1,6 @@
 # DSH SDK 批量测试
 
-`dshrun.py` 使用已安装桌面应用自带的 `dsh --profile sdk`，经 `dsh_driver.py` 的 JSON-RPC 接口运行默认合并题库（`v3-combined8`，8 题、19 轮），全部可按顺序会话执行。结果不是桌面UI测试。
+`dshrun.py` 使用已安装桌面应用自带的 `dsh --profile sdk`，经 `dsh_driver.py` 的 JSON-RPC 接口运行默认合并题库（`v3-combined10`，10 题、23 轮），全部可按顺序会话执行。结果不是桌面UI测试。
 
 ```sh
 python3 dshrun.py prepare --model deepseek-flash --effort high \

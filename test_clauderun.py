@@ -99,7 +99,7 @@ class ClaudeRunnerTests(unittest.TestCase):
         self.assertIn('Claude Code CLI', (self.output/'report.md').read_text())
 
     def test_tool_calls_and_permission_denials_are_execution_evidence(self):
-        self.prepare(models=['writer', 'denied'], cases='adv-room-reassignment')
+        self.prepare(models=['writer', 'denied'], cases='adv-authority-by-field')
         self.run_plan()
         by_model = {r['config']['model']: r for r in self.records()}
         evidence = by_model['writer']['turns'][0]['execution_evidence']
@@ -136,7 +136,7 @@ class ClaudeRunnerTests(unittest.TestCase):
         self.prepare(cases='adv-repair-receipt-replay', allowed_tools='')
         self.assertEqual(study.load(self.output/'plan.json')['allowed_tools'], '')
         shutil.rmtree(self.output)
-        self.prepare(cases='adv-room-reassignment')
+        self.prepare(cases='adv-authority-by-field')
         self.assertEqual(study.load(self.output/'plan.json')['allowed_tools'], '')
         shutil.rmtree(self.output)
         self.prepare(cases='adv-repair-receipt-replay', permission_mode='bypassPermissions')

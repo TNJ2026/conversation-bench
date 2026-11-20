@@ -15,13 +15,15 @@ import review_v3
 
 ROOT = Path(__file__).resolve().parent
 WORKSPACES = ROOT.parent/'conversation-bench-workspaces'
-DEFAULT_SUITE = 'v3-combined8'
+DEFAULT_SUITE = 'v3-combined10'
 # Combined suites: (component suites, case IDs left out). Components stay frozen; a new
 # combination is a new suite name, so earlier plans keep resolving to the same cases.
 COMBINED_SUITES = {
     'v3-combined8': (('v3-advanced5', 'v3-challenge3'), ()),
     # Drops the room case (same update-then-revoke pattern as the shipment case) and adds Guard4.
     'v3-combined11': (('v3-advanced5', 'v3-challenge3', 'v3-guard4'), ('adv-room-reassignment',)),
+    'v3-combined10': (('v3-advanced5', 'v3-challenge3', 'v3-guard4'),
+                      ('adv-room-reassignment', 'adv-shipment-update')),
 }
 COMPONENT_SUITES = ('v3-advanced5', 'v3-challenge3', 'v3-guard4')
 SUITES = (*COMBINED_SUITES, *COMPONENT_SUITES)
@@ -194,13 +196,11 @@ def artifact_checks(spec, files, previous, artifacts, limits=()):
                      'detail': ('未找到该文件' if text is None else '去掉首尾空白后与 ' + repr(expected_file['value']) + ' 比较') + '；只证明文件内容'})
     expected = spec.get('expect_csv')
     if expected:
-        import csv, io
+        import csv
         name = expected['file']
         text = artifacts.get(name)
         try:
-            rows_found = None if text is None else [[cell.strip() for cell in row]
-                                                    for row in csv.reader(io.StringIO(text.lstrip('\ufeff')), strict=True)
-                                                    if any(cell.strip() for cell in row)]
+            rows_found = None if text is None else text_checks.csv_data_rows(text)
         except csv.Error:
             rows_found = []
         want = expected['rows']
@@ -637,7 +637,8 @@ def main():
     p=argparse.ArgumentParser(description=__doc__); sub=p.add_subparsers(dest='command',required=True)
     listing = sub.add_parser('list'); listing.add_argument('--suite', choices=SUITES, default=DEFAULT_SUITE)
     c=sub.add_parser('create'); c.add_argument('--cases'); c.add_argument('--products',type=product_list,default=DEFAULT_PRODUCTS,help='逗号分隔的应用：dsh,chatgpt,hermes；默认 dsh,chatgpt，可只选一个'); c.add_argument('--repeat',type=int,default=1); c.add_argument('--seed',type=int,default=42); c.add_argument('--mode',choices=['default','controlled'],default='default'); c.add_argument('--output')
-    c.add_argument('--suite', choices=SUITES, default=DEFAULT_SUITE, help='默认合并 8 题；v3-combined11 为合并去重并补 Guard4 的新版；也可单选 Advanced5、Challenge3 或 Guard4')
+    c.add_argument('--suite', choices=SUITES, default=DEFAULT_SUITE,
+                   help=f'默认 {DEFAULT_SUITE}（10 题）；也可选择旧合并题库或单个子题组')
     for name in ('next','report','blind'):
         sub.add_parser(name).add_argument('--plan',required=True)
     b=sub.add_parser('begin'); b.add_argument('--plan',required=True); b.add_argument('--job',required=True); b.add_argument('--model',required=True)

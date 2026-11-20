@@ -163,6 +163,7 @@ def project(*case_ids,products=('dsh',)):
         study.save(root/'cases-v2.json', selected)
         study.save(root/'cases-v3-advanced5.json', selected)
         study.save(root/'cases-v3-challenge3.json', [])
+        study.save(root/'cases-v3-guard4.json', [])
         plan=root/'studies'/'test'/'plan.json'
         # WORKSPACES covers every begin in the test, including ones issued through the CLI.
         with patch.object(study,'ROOT',root), patch.object(study,'WORKSPACES',root/'workspaces'):
