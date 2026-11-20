@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>五阶魔方 · 5×5×5</title>
+<style>
+  :root {
+    --bg1: #141a26; --bg2: #212b3d; --card: #1b2333; --line: #34405a;
+    --text: #e8edf6; --muted: #9aa7bd; --accent: #4cc2ff; --danger: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    font: 15px/1.5 system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    color: var(--text);
+    background: radial-gradient(1200px 700px at 30% 10%, var(--bg2), var(--bg1));
+  }
+  header { padding: 18px 24px 4px; }
+  header h1 { margin: 0; font-size: 22px; letter-spacing: .5px; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  main { display: flex; flex-wrap: wrap; gap: 20px; padding: 12px 24px 28px; align-items: flex-start; }
+  .viewer { flex: 1 1 460px; min-width: 300px; display: flex; flex-direction: column; align-items: center; }
+  .cube-view {
+    width: min(92vw, 520px); aspect-ratio: 1 / 1; position: relative;
+    perspective: 1500px; touch-action: none; cursor: grab; outline: none;
+    border-radius: 18px; background: radial-gradient(circle at 50% 45%, #2b3850 0%, #182031 70%);
+    box-shadow: inset 0 0 0 1px var(--line), 0 18px 40px rgba(0,0,0,.35);
+    user-select: none; -webkit-user-select: none; overflow: hidden;
+  }
+  .cube-view:focus-visible { box-shadow: inset 0 0 0 2px var(--accent), 0 18px 40px rgba(0,0,0,.35); }
+  .cube-view.dragging { cursor: grabbing; }
+  .cube { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d; }
+  .cubie { position: absolute; transform-style: preserve-3d; }
+  .face { position: absolute; inset: 0; background: #0b0d12; backface-visibility: hidden; }
+  .sticker { position: absolute; inset: 7%; border-radius: 14%; box-shadow: inset 0 0 0 1px rgba(0,0,0,.25); }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .status { margin-top: 10px; min-height: 22px; font-size: 14px; color: var(--muted); text-align: center; }
+  .status.bad { color: var(--danger); }
+  .panel {
+    flex: 1 1 340px; max-width: 560px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 16px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button, select {
+    font: inherit; color: var(--text); background: #2a3550; border: 1px solid #44527a;
+    border-radius: 10px; padding: 8px 14px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: #33416a; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: #1f6fb2; border-color: #2c86d1; }
+  button.primary:hover:not(:disabled) { background: #2580cc; }
+  button.warn { background: #5a2c35; border-color: #7a3c48; }
+  label { font-size: 13px; color: var(--muted); }
+  textarea {
+    width: 100%; min-height: 92px; resize: vertical; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--text); background: #121826; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px;
+    word-break: break-all;
+  }
+  .error {
+    color: #ffd7d7; background: #4a1f26; border: 1px solid #8a3340; border-radius: 10px; padding: 8px 12px; font-size: 14px;
+  }
+  .log {
+    font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #c9d4e8;
+    background: #121826; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px;
+    max-height: 160px; overflow: auto; word-break: break-word; min-height: 40px;
+  }
+  .meta { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); }
+  .legend { display: flex; gap: 6px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; box-shadow: inset 0 0 0 1px rgba(0,0,0,.3); }
+</style>
+</head>
+<body>
+<header>
+  <h1>五阶魔方 5×5×5</h1>
+  <p>拖动（鼠标或触摸）立体视图可旋转观察角度；方向键也可调整视角。视角变化不影响魔方状态。</p>
+</header>
+<main>
+  <section class="viewer">
+    <div id="cube-view" class="cube-view" data-testid="cube-view" tabindex="0" role="img" aria-label="五阶魔方立体视图，可拖动旋转视角">
+      <div id="cube" class="cube"></div>
+    </div>
+    <div class="hint">双击视图恢复默认视角</div>
+    <div id="status" class="status" aria-live="polite">已复原</div>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <button id="btn-scramble" data-testid="cube-scramble">打乱</button>
+      <button id="btn-solve" class="primary" data-testid="cube-solve">求解</button>
+      <button id="btn-reset" class="warn" data-testid="cube-reset">重置</button>
+      <label for="speed" style="margin-left:auto">动画速度</label>
+      <select id="speed">
+        <option value="320">慢</option>
+        <option value="180">中</option>
+        <option value="90" selected>快</option>
+        <option value="35">极快</option>
+      </select>
+    </div>
+
+    <div>
+      <label for="import-input">导入面片串（150 字符，面序 URFDLB，每面 25 字符，从外朝内看逐行读取）</label>
+      <textarea id="import-input" data-testid="cube-import-input" spellcheck="false" placeholder="UUUUUUUUUUUUUUUUUUUUUUUUURRRRRRRRRRRRRRRRRRRRRRRRRFFFF…"></textarea>
+    </div>
+    <div class="row">
+      <button id="btn-import" data-testid="cube-import">导入</button>
+      <button id="btn-fill" title="把当前状态写入输入框">填入当前状态</button>
+    </div>
+    <div id="cube-error" class="error" data-testid="cube-error" role="alert" hidden></div>
+
+    <div class="meta"><span>转动记录（自当前基准局面起）</span><span id="log-count">0 步</span></div>
+    <div id="log" class="log" aria-live="off"></div>
+
+    <div class="legend" aria-hidden="true">
+      <span><i style="background:#ffffff"></i>U</span>
+      <span><i style="background:#d7263d"></i>R</span>
+      <span><i style="background:#1f9d55"></i>F</span>
+      <span><i style="background:#ffd500"></i>D</span>
+      <span><i style="background:#ff7a00"></i>L</span>
+      <span><i style="background:#1565c0"></i>B</span>
+    </div>
+  </section>
+</main>
+<script src="cube-core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
