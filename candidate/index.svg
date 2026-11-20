@@ -1,0 +1,519 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" id="pelican-scene" role="img" aria-labelledby="scene-title scene-desc">
+  <title id="scene-title">骑自行车的鹈鹕</title>
+  <desc id="scene-desc">一只戴头盔的鹈鹕坐在自行车上踩踏板，车轮和曲柄连续转动，路面向后移动。左上角有暂停/继续和速度切换按钮。</desc>
+  <style><![CDATA[
+    .ui { cursor: pointer; -webkit-user-select: none; user-select: none; }
+    .ui .btn-bg { fill: #ffffff; stroke: #2d3640; stroke-width: 2; transition: fill .15s; }
+    .ui:hover .btn-bg { fill: #fff3d6; }
+    .ui:focus { outline: none; }
+    .ui:focus-visible .btn-bg { stroke: #e4483b; stroke-width: 3; }
+    .ui:active .btn-bg { fill: #ffe2a8; }
+    .ui text { font: 600 17px system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; fill: #2d3640; }
+    .anchor { fill: none; stroke: none; pointer-events: none; }
+    .ol { stroke: #2d3640; stroke-linejoin: round; stroke-linecap: round; }
+  ]]></style>
+
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9fd4ec"/>
+      <stop offset="0.7" stop-color="#e6f3ef"/>
+      <stop offset="1" stop-color="#fbeed3"/>
+    </linearGradient>
+    <linearGradient id="road" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5d6470"/>
+      <stop offset="1" stop-color="#454b55"/>
+    </linearGradient>
+    <linearGradient id="pouch" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffb36b"/>
+      <stop offset="1" stop-color="#f07d4f"/>
+    </linearGradient>
+    <linearGradient id="bodyShade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.75" stop-color="#eef1f5"/>
+      <stop offset="1" stop-color="#d5dbe3"/>
+    </linearGradient>
+    <linearGradient id="frameGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1ea3a0"/>
+      <stop offset="1" stop-color="#147a7c"/>
+    </linearGradient>
+    <radialGradient id="sunGlow">
+      <stop offset="0" stop-color="#fff6c9"/>
+      <stop offset="0.55" stop-color="#ffe08a"/>
+      <stop offset="1" stop-color="#ffe08a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- ================= BACKGROUND ================= -->
+  <rect width="800" height="600" fill="url(#sky)"/>
+  <circle cx="660" cy="105" r="80" fill="url(#sunGlow)"/>
+  <circle cx="660" cy="105" r="38" fill="#ffe27a"/>
+  <g fill="#ffffff" opacity="0.9">
+    <path d="M90 140 a22 22 0 0 1 38 -14 a28 28 0 0 1 50 8 a18 18 0 0 1 8 34 h-92 a16 16 0 0 1 -4 -28z"/>
+    <path d="M300 80 a16 16 0 0 1 28 -10 a22 22 0 0 1 38 6 a14 14 0 0 1 6 26 h-70 a12 12 0 0 1 -2 -22z" opacity="0.8"/>
+    <path d="M560 200 a14 14 0 0 1 24 -8 a18 18 0 0 1 32 5 a12 12 0 0 1 5 22 h-58 a10 10 0 0 1 -3 -19z" opacity="0.75"/>
+  </g>
+  <!-- distant birds -->
+  <g fill="none" stroke="#5b6b7a" stroke-width="2" stroke-linecap="round" opacity="0.6">
+    <path d="M220 190 q7 -7 14 0 q7 -7 14 0"/>
+    <path d="M252 172 q5 -5 10 0 q5 -5 10 0"/>
+  </g>
+  <!-- parallax layers (filled by script, all periodic with the pedal cycle) -->
+  <g id="hills-far"><path id="hills-far-path" fill="#a9cdb9"/></g>
+  <g id="hills-near"><path id="hills-near-path" fill="#86b896"/></g>
+  <g id="trees"></g>
+  <rect x="0" y="488" width="800" height="18" fill="#7fae6a"/>
+  <rect x="0" y="503" width="800" height="97" fill="url(#road)"/>
+  <rect x="0" y="503" width="800" height="4" fill="#c9c2ad"/>
+  <g id="road-marks"></g>
+  <g id="grass-tufts"></g>
+
+  <!-- ground shadow -->
+  <ellipse cx="405" cy="508" rx="250" ry="9" fill="#2a2f36" opacity="0.28"/>
+
+  <!-- ================= FAR SIDE (behind the frame) ================= -->
+  <!-- far wing (peeks above the back) -->
+  <g id="wing-far">
+    <path class="ol" stroke-width="2" fill="#aeb7c2"
+          d="M372 176 C 425 160 490 190 540 238 L 536 246 C 490 214 432 196 380 196 Z"/>
+    <path fill="#3c4450" d="M496 200 C 515 212 530 226 540 238 L 536 246 C 524 232 510 220 492 210 Z"/>
+  </g>
+
+  <!-- far leg (b) -->
+  <g id="leg-b">
+    <path id="leg-b-thigh-ol" fill="none" stroke="#2d3640" stroke-width="26" stroke-linecap="round"/>
+    <path id="leg-b-thigh" fill="none" stroke="#bcc4ce" stroke-width="21" stroke-linecap="round"/>
+    <path id="leg-b-shin" fill="none" stroke="#c96a2c" stroke-width="9" stroke-linecap="round"/>
+    <circle id="leg-b-knee" r="7" fill="#c96a2c"/>
+  </g>
+  <!-- far crank arm + pedal (b) -->
+  <g id="crank-far">
+    <line x1="390" y1="415" x2="352" y2="415" stroke="#59616c" stroke-width="7" stroke-linecap="round"/>
+    <circle class="anchor" data-testid="pelican-pedal-b" cx="352" cy="415" r="3"/>
+  </g>
+  <g id="pedal-b-platform">
+    <rect x="-12" y="-3" width="24" height="6" rx="2" fill="#4a515b"/>
+    <rect x="-12" y="-3" width="5" height="6" rx="1.5" fill="#e0a021"/>
+  </g>
+  <g id="foot-b">
+    <path class="ol" stroke-width="1.5" fill="#c96a2c"
+          d="M-4 -15 L-11 -1 L-10 0 L23 0 Q26 -2 23 -4 L18 -3 Q20 -6 15 -6 L 6 -7 Z"/>
+    <circle class="anchor" data-testid="pelican-foot-b" cx="0" cy="0" r="2"/>
+  </g>
+
+  <!-- ================= WHEELS ================= -->
+  <g id="wheel-rear-static">
+    <circle cx="250" cy="405" r="95" fill="none" stroke="#24282f" stroke-width="10"/>
+    <circle cx="250" cy="405" r="95" fill="none" stroke="#3a4049" stroke-width="2" stroke-dasharray="3 6"/>
+    <circle cx="250" cy="405" r="88" fill="none" stroke="#c8ced6" stroke-width="4"/>
+  </g>
+  <g id="wheel-rear">
+    <g id="spokes-rear" stroke="#9aa3ae" stroke-width="1.3"></g>
+    <rect x="246" y="314" width="8" height="10" rx="2" fill="#7b838d"/>
+    <circle cx="250" cy="335" r="5" fill="#ff8a1f" stroke="#a24f05" stroke-width="1.5"/>
+    <circle class="anchor" data-testid="pelican-wheel-rear-mark" cx="250" cy="335" r="3"/>
+    <!-- rear cog -->
+    <circle cx="250" cy="405" r="11" fill="#8b939d" stroke="#59616c" stroke-width="3" stroke-dasharray="2.2 1.4"/>
+  </g>
+  <circle cx="250" cy="405" r="5" fill="#d9dee4" stroke="#59616c" stroke-width="1.5"/>
+  <circle class="anchor" data-testid="pelican-wheel-rear-center" cx="250" cy="405" r="3"/>
+
+  <g id="wheel-front-static">
+    <circle cx="560" cy="405" r="95" fill="none" stroke="#24282f" stroke-width="10"/>
+    <circle cx="560" cy="405" r="95" fill="none" stroke="#3a4049" stroke-width="2" stroke-dasharray="3 6"/>
+    <circle cx="560" cy="405" r="88" fill="none" stroke="#c8ced6" stroke-width="4"/>
+  </g>
+  <g id="wheel-front">
+    <g id="spokes-front" stroke="#9aa3ae" stroke-width="1.3"></g>
+    <rect x="556" y="314" width="8" height="10" rx="2" fill="#7b838d"/>
+    <circle cx="560" cy="335" r="5" fill="#ff8a1f" stroke="#a24f05" stroke-width="1.5"/>
+    <circle class="anchor" data-testid="pelican-wheel-front-mark" cx="560" cy="335" r="3"/>
+  </g>
+  <circle cx="560" cy="405" r="6" fill="#d9dee4" stroke="#59616c" stroke-width="1.5"/>
+  <circle class="anchor" data-testid="pelican-wheel-front-center" cx="560" cy="405" r="3"/>
+
+  <!-- ================= FRAME ================= -->
+  <g id="frame" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- chain loop -->
+    <path id="chain" d="M250 394 L390 389 A26 26 0 0 1 390 441 L250 416 A11 11 0 0 1 250 394 Z"
+          stroke="#4b525c" stroke-width="3"/>
+    <!-- stays -->
+    <path d="M250 405 L390 415" stroke="url(#frameGrad)" stroke-width="7"/>
+    <path d="M250 405 L357 296" stroke="url(#frameGrad)" stroke-width="6"/>
+    <!-- seat tube, top tube, down tube -->
+    <path d="M390 415 L352 283" stroke="url(#frameGrad)" stroke-width="10"/>
+    <path d="M356 296 L524 278" stroke="url(#frameGrad)" stroke-width="9"/>
+    <path d="M390 415 L534 318" stroke="url(#frameGrad)" stroke-width="11"/>
+    <!-- head tube -->
+    <path d="M522 268 L536 322" stroke="#136a6c" stroke-width="13"/>
+    <!-- fork -->
+    <path d="M536 322 C 546 352 554 378 560 405" stroke="#2d3640" stroke-width="7"/>
+    <!-- frame highlights -->
+    <path d="M362 296 L520 280" stroke="#7fe0d6" stroke-width="2" opacity="0.6"/>
+    <path d="M398 404 L528 316" stroke="#7fe0d6" stroke-width="2" opacity="0.5"/>
+    <!-- bottle cage + bottle -->
+    <g transform="rotate(-34 458 368)">
+      <rect x="430" y="352" width="56" height="18" rx="7" fill="#f4f1e6" stroke="#2d3640" stroke-width="2"/>
+      <rect x="486" y="356" width="8" height="10" rx="2" fill="#e4483b" stroke="#2d3640" stroke-width="1.5"/>
+      <path d="M444 361 q6 -6 12 0 q-6 6 -12 0z m12 0 l6 -4 v8z" fill="#5aa9d6"/>
+    </g>
+    <!-- seat post + saddle -->
+    <path d="M352 283 L347 272" stroke="#7b838d" stroke-width="7"/>
+    <path d="M314 270 C 322 263 350 263 372 266 C 378 267 380 272 374 274 C 352 276 330 278 318 277 C 311 276 310 273 314 270 Z"
+          fill="#2d3640" stroke="#1d232a" stroke-width="1.5"/>
+    <!-- stem + drop bar (far grip below wing) -->
+    <path d="M522 268 L528 246" stroke="#59616c" stroke-width="7"/>
+    <path d="M516 246 L548 244 C 570 243 572 270 552 274" stroke="#2d3640" stroke-width="7"/>
+    <path d="M546 245 l6 -9" stroke="#2d3640" stroke-width="6"/>
+    <!-- bell -->
+    <circle cx="520" cy="238" r="5" fill="#f2c94c" stroke="#2d3640" stroke-width="1.5"/>
+    <!-- head light -->
+    <path d="M532 290 l14 -3 v10 z" fill="#fff2a8" stroke="#2d3640" stroke-width="1.5"/>
+    <!-- rear reflector -->
+    <rect x="335" y="300" width="7" height="13" rx="2" fill="#e4483b" transform="rotate(-45 338 306)"/>
+  </g>
+  <circle class="anchor" data-testid="pelican-seat" cx="345" cy="265" r="3"/>
+
+  <!-- chainring (rotates with the crank) -->
+  <g id="chainring">
+    <circle cx="390" cy="415" r="26" fill="none" stroke="#7b838d" stroke-width="5" stroke-dasharray="3.4 3.4"/>
+    <circle cx="390" cy="415" r="22" fill="#b3bac3" stroke="#59616c" stroke-width="2"/>
+    <path d="M390 415 m0 -16 l5 10 l-10 0 z M390 415 m0 16 l-5 -10 l10 0 z" fill="#8b939d"/>
+    <circle cx="390" cy="415" r="9" fill="#d9dee4" stroke="#59616c" stroke-width="1.5"/>
+  </g>
+  <circle class="anchor" data-testid="pelican-crank" cx="390" cy="415" r="3"/>
+
+  <!-- ================= PELICAN BODY ================= -->
+  <g id="torso">
+    <!-- tail -->
+    <path class="ol" stroke-width="2" fill="#3c4450"
+          d="M300 206 L268 196 L276 208 L262 214 L280 219 L272 230 L306 222 Z"/>
+    <!-- body -->
+    <path class="ol" stroke-width="2.5" fill="url(#bodyShade)"
+          d="M296 206 C 300 240 318 262 346 265 C 392 270 434 252 448 214 C 458 186 440 160 408 158 C 366 156 326 172 296 206 Z"/>
+    <!-- belly feather hints -->
+    <path d="M330 240 q8 6 16 2 M360 250 q8 6 16 1 M392 246 q8 6 16 0" fill="none" stroke="#c3cad3" stroke-width="1.6" stroke-linecap="round"/>
+    <!-- neck + head -->
+    <g id="head">
+      <path d="M424 190 C 452 168 440 140 466 112" fill="none" stroke="#2d3640" stroke-width="31" stroke-linecap="round"/>
+      <path d="M424 190 C 452 168 440 140 466 112" fill="none" stroke="#ffffff" stroke-width="26" stroke-linecap="round"/>
+      <path d="M440 178 C 452 162 448 146 458 130" fill="none" stroke="#f3e2b0" stroke-width="7" stroke-linecap="round" opacity="0.8"/>
+      <!-- pouch (behind bill) -->
+      <path class="ol" stroke-width="2" fill="url(#pouch)"
+            d="M488 106 C 510 140 560 150 604 132 L 606 126 C 570 128 528 120 494 98 Z"/>
+      <path d="M512 126 q20 10 44 10" fill="none" stroke="#d9673a" stroke-width="1.5" stroke-linecap="round"/>
+      <!-- head -->
+      <ellipse class="ol" stroke-width="2.5" cx="474" cy="100" rx="27" ry="22" fill="#ffffff"/>
+      <!-- upper bill -->
+      <path class="ol" stroke-width="2" fill="#f5b83d"
+            d="M490 90 C 530 98 578 114 612 120 C 620 122 620 132 611 132 L 606 126 C 570 122 528 112 494 104 Z"/>
+      <path d="M498 97 C 540 106 580 117 608 123" fill="none" stroke="#c7861c" stroke-width="1.4"/>
+      <!-- eye -->
+      <circle cx="486" cy="96" r="6.5" fill="#fffbe8" stroke="#2d3640" stroke-width="1.5"/>
+      <circle cx="488" cy="96" r="3.4" fill="#1d232a"/>
+      <circle cx="489.3" cy="94.6" r="1.1" fill="#ffffff"/>
+      <!-- helmet -->
+      <path class="ol" stroke-width="2.5" fill="#e4483b"
+            d="M447 96 C 446 72 470 62 490 68 C 504 72 508 82 506 88 C 486 86 466 90 447 96 Z"/>
+      <path d="M462 74 l6 12 M476 70 l3 14 M490 71 l0 13" stroke="#ffd0c8" stroke-width="3" stroke-linecap="round"/>
+      <path d="M452 95 C 456 104 466 112 490 108" fill="none" stroke="#2d3640" stroke-width="2"/>
+      <!-- crest feathers peeking out -->
+      <path d="M447 92 q-12 -2 -16 6 q8 -1 14 2 z" fill="#f3d27a" stroke="#2d3640" stroke-width="1.5"/>
+    </g>
+  </g>
+
+  <!-- ================= NEAR SIDE ================= -->
+  <!-- near crank arm + pedal (a) -->
+  <g id="crank-near">
+    <line x1="390" y1="415" x2="428" y2="415" stroke="#c8ced6" stroke-width="8" stroke-linecap="round"/>
+    <line x1="390" y1="415" x2="428" y2="415" stroke="#59616c" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+    <circle cx="390" cy="415" r="5" fill="#59616c"/>
+    <circle class="anchor" data-testid="pelican-pedal-a" cx="428" cy="415" r="3"/>
+  </g>
+  <g id="pedal-a-platform">
+    <rect x="-12" y="-3" width="24" height="6" rx="2" fill="#2d3640"/>
+    <rect x="-12" y="-3" width="5" height="6" rx="1.5" fill="#ffb627"/>
+  </g>
+
+  <!-- near leg (a) -->
+  <g id="leg-a">
+    <path id="leg-a-thigh-ol" fill="none" stroke="#2d3640" stroke-width="27" stroke-linecap="round"/>
+    <path id="leg-a-thigh" fill="none" stroke="#f2f4f7" stroke-width="22" stroke-linecap="round"/>
+    <path id="leg-a-shin-ol" fill="none" stroke="#2d3640" stroke-width="12" stroke-linecap="round"/>
+    <path id="leg-a-shin" fill="none" stroke="#f08a3c" stroke-width="8" stroke-linecap="round"/>
+    <circle id="leg-a-knee" r="6" fill="#f08a3c" stroke="#2d3640" stroke-width="1.5"/>
+  </g>
+  <g id="foot-a">
+    <path class="ol" stroke-width="2" fill="#f08a3c"
+          d="M-4 -15 L-11 -1 L-10 0 L23 0 Q26 -2 23 -4 L18 -3 Q20 -6 15 -6 L 6 -7 Z"/>
+    <path d="M-2 -7 L16 -3 M-4 -4 L10 -1" stroke="#c9601f" stroke-width="1.3" stroke-linecap="round"/>
+    <circle class="anchor" data-testid="pelican-foot-a" cx="0" cy="0" r="2"/>
+  </g>
+  <circle class="anchor" data-testid="pelican-hip" cx="345" cy="257" r="3"/>
+
+  <!-- near wing, wing tip curled around the near grip -->
+  <g id="wing-near">
+    <path class="ol" stroke-width="2.5" fill="#dfe4ea"
+          d="M360 186 C 410 166 470 182 512 214 C 532 228 548 246 556 258 C 550 266 540 264 534 258 C 504 236 466 226 420 228 C 388 230 362 218 360 186 Z"/>
+    <!-- secondaries -->
+    <path d="M378 214 q16 10 34 8 M400 222 q18 6 36 2 M426 226 q18 2 34 -2" fill="none" stroke="#9aa5b2" stroke-width="1.8" stroke-linecap="round"/>
+    <!-- dark primaries -->
+    <path class="ol" stroke-width="2" fill="#3c4450"
+          d="M470 196 C 500 206 534 230 556 258 C 550 266 540 264 534 258 C 516 242 494 230 466 222 Z"/>
+    <path d="M488 214 l30 20 M498 208 l34 28" stroke="#626c79" stroke-width="1.5" stroke-linecap="round"/>
+    <!-- coverts highlight -->
+    <path d="M372 192 C 410 178 452 186 484 200" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+  </g>
+  <!-- near grip (over the wing tip) -->
+  <path d="M549 258 l8 16" stroke="#2d3640" stroke-width="8" stroke-linecap="round"/>
+
+  <!-- ================= CONTROLS ================= -->
+  <g id="controls">
+    <g class="ui" data-testid="pelican-play" role="button" tabindex="0" aria-label="暂停" aria-pressed="false" transform="translate(20 18)">
+      <title id="play-title">暂停</title>
+      <rect class="btn-bg" width="118" height="42" rx="21"/>
+      <g id="icon-pause" fill="#2d3640">
+        <rect x="18" y="12" width="6" height="18" rx="1.5"/>
+        <rect x="30" y="12" width="6" height="18" rx="1.5"/>
+      </g>
+      <path id="icon-play" d="M19 11 L38 21 L19 31 Z" fill="#2d3640" display="none"/>
+      <text id="play-label" x="50" y="27.5">暂停</text>
+    </g>
+    <g class="ui" data-testid="pelican-speed" role="button" tabindex="0" aria-label="速度 1 倍，点击切换到 2 倍" transform="translate(150 18)">
+      <title id="speed-title">切换速度（当前 1×）</title>
+      <rect class="btn-bg" width="118" height="42" rx="21"/>
+      <g fill="none" stroke="#2d3640" stroke-width="2.5" stroke-linecap="round">
+        <path d="M16 28 a12 12 0 1 1 24 0"/>
+        <path id="speed-needle" d="M28 28 L22 19"/>
+      </g>
+      <text id="speed-label" x="50" y="27.5">1× 速度</text>
+    </g>
+  </g>
+
+  <script><![CDATA[
+  (function () {
+    'use strict';
+    var NS = 'http://www.w3.org/2000/svg';
+    var $ = function (id) { return document.getElementById(id); };
+
+    // ---- fixed geometry (screen units of the viewBox) ----
+    var CRANK = { x: 390, y: 415 }, CRANK_R = 38;
+    var REAR = { x: 250, y: 405 }, FRONT = { x: 560, y: 405 }, WHEEL_R = 95;
+    var HIP_A = { x: 345, y: 257 }, HIP_B = { x: 337, y: 252 };
+    var THIGH = 98, SHIN = 110;
+    var SOLE = 4;                         // sole sits 4px above pedal axle (on the platform)
+    var ANKLE = { x: -4, y: -15 };        // ankle relative to sole anchor
+    var CYCLE = 2;                        // seconds per pedal revolution at 1x
+    var WHEEL_CIRC = 2 * Math.PI * WHEEL_R;
+    var ROAD_TILE = WHEEL_CIRC / 3;       // road pattern repeats 3x per revolution -> seamless
+    var CHAIN_CIRC = 2 * Math.PI * 26, CHAIN_TILE = CHAIN_CIRC / 24;
+    var HILL_FAR = 200, HILL_NEAR = 260, TREE_TILE = 300;
+
+    var state = { phase: 0, paused: false, rate: 1 };
+    var manual = false;
+    var lastT = null;
+
+    // ---- build periodic decorations ----
+    function spokes(id, c) {
+      var g = $(id);
+      for (var i = 0; i < 18; i++) {
+        var a = i * Math.PI * 2 / 18, off = (i % 2 ? 1 : -1) * 0.12;
+        var l = document.createElementNS(NS, 'line');
+        l.setAttribute('x1', (c.x + 5 * Math.cos(a + off)).toFixed(2));
+        l.setAttribute('y1', (c.y + 5 * Math.sin(a + off)).toFixed(2));
+        l.setAttribute('x2', (c.x + 86 * Math.cos(a)).toFixed(2));
+        l.setAttribute('y2', (c.y + 86 * Math.sin(a)).toFixed(2));
+        g.appendChild(l);
+      }
+    }
+    spokes('spokes-rear', REAR);
+    spokes('spokes-front', FRONT);
+
+    function hillPath(period, base, amp, amp2, x0, x1) {
+      var d = 'M' + x0 + ' 520';
+      for (var x = x0; x <= x1; x += 5) {
+        var t = 2 * Math.PI * x / period;
+        var y = base - amp * (0.5 + 0.5 * Math.sin(t)) - amp2 * Math.sin(2 * t + 1);
+        d += ' L' + x + ' ' + y.toFixed(1);
+      }
+      return d + ' L' + x1 + ' 520 Z';
+    }
+    $('hills-far-path').setAttribute('d', hillPath(HILL_FAR, 440, 70, 8, -HILL_FAR, 800 + HILL_FAR));
+    $('hills-near-path').setAttribute('d', hillPath(HILL_NEAR, 482, 48, 6, -HILL_NEAR, 800 + HILL_NEAR));
+
+    function el(tag, attrs, parent) {
+      var e = document.createElementNS(NS, tag);
+      for (var k in attrs) e.setAttribute(k, attrs[k]);
+      parent.appendChild(e);
+      return e;
+    }
+    var trees = $('trees');
+    for (var tx = -TREE_TILE; tx < 800 + TREE_TILE; tx += TREE_TILE) {
+      el('rect', { x: tx + 60, y: 448, width: 6, height: 42, fill: '#6b5a48' }, trees);
+      el('circle', { cx: tx + 63, cy: 440, r: 24, fill: '#5f9a6c' }, trees);
+      el('circle', { cx: tx + 52, cy: 448, r: 14, fill: '#6faa79' }, trees);
+      el('rect', { x: tx + 200, y: 462, width: 5, height: 28, fill: '#6b5a48' }, trees);
+      el('path', { d: 'M' + (tx + 202.5) + ' 418 l18 48 h-36 z', fill: '#4f8a63' }, trees);
+    }
+    var marks = $('road-marks');
+    for (var mx = -ROAD_TILE; mx < 800 + ROAD_TILE; mx += ROAD_TILE) {
+      el('rect', { x: mx.toFixed(2), y: 556, width: (ROAD_TILE * 0.5).toFixed(2), height: 7, rx: 3, fill: '#f1e3b2' }, marks);
+      el('rect', { x: (mx + ROAD_TILE * 0.62).toFixed(2), y: 528, width: 10, height: 3, rx: 1.5, fill: '#6c7480' }, marks);
+      el('rect', { x: (mx + ROAD_TILE * 0.2).toFixed(2), y: 584, width: 16, height: 3, rx: 1.5, fill: '#3b4048' }, marks);
+    }
+    var tufts = $('grass-tufts');
+    for (var gx = -ROAD_TILE; gx < 800 + ROAD_TILE; gx += ROAD_TILE / 2) {
+      el('path', { d: 'M' + gx.toFixed(2) + ' 502 l3 -10 l2 8 l4 -12 l2 12 l3 -7 l2 9 z', fill: '#5f9150' }, tufts);
+    }
+
+    // ---- refs ----
+    var R = {
+      wheelRear: $('wheel-rear'), wheelFront: $('wheel-front'),
+      crankNear: $('crank-near'), crankFar: $('crank-far'), chainring: $('chainring'),
+      pedalA: $('pedal-a-platform'), pedalB: $('pedal-b-platform'),
+      footA: $('foot-a'), footB: $('foot-b'),
+      aThigh: $('leg-a-thigh'), aThighOl: $('leg-a-thigh-ol'), aShin: $('leg-a-shin'), aShinOl: $('leg-a-shin-ol'), aKnee: $('leg-a-knee'),
+      bThigh: $('leg-b-thigh'), bThighOl: $('leg-b-thigh-ol'), bShin: $('leg-b-shin'), bKnee: $('leg-b-knee'),
+      torso: $('torso'), head: $('head'), wingNear: $('wing-near'), wingFar: $('wing-far'),
+      chain: $('chain'), hillsFar: $('hills-far'), hillsNear: $('hills-near'), trees: trees,
+      marks: marks, tufts: tufts,
+      play: document.querySelector('[data-testid="pelican-play"]'),
+      speed: document.querySelector('[data-testid="pelican-speed"]')
+    };
+    R.chain.setAttribute('stroke-dasharray', (CHAIN_TILE * 0.55).toFixed(4) + ' ' + (CHAIN_TILE * 0.45).toFixed(4));
+
+    // two-bone IK, knee bends forward (+x)
+    function knee(h, a) {
+      var dx = a.x - h.x, dy = a.y - h.y;
+      var d = Math.sqrt(dx * dx + dy * dy);
+      d = Math.max(Math.abs(THIGH - SHIN) + 1, Math.min(THIGH + SHIN - 0.5, d));
+      var phi = Math.atan2(dy, dx);
+      var c = (THIGH * THIGH + d * d - SHIN * SHIN) / (2 * THIGH * d);
+      var alpha = Math.acos(Math.max(-1, Math.min(1, c)));
+      return { x: h.x + THIGH * Math.cos(phi - alpha), y: h.y + THIGH * Math.sin(phi - alpha) };
+    }
+    function seg(p, q) { return 'M' + p.x.toFixed(2) + ' ' + p.y.toFixed(2) + ' L' + q.x.toFixed(2) + ' ' + q.y.toFixed(2); }
+    function tr(x, y) { return 'translate(' + x.toFixed(3) + ' ' + y.toFixed(3) + ')'; }
+    function rot(a, c) { return 'rotate(' + a.toFixed(4) + ' ' + c.x + ' ' + c.y + ')'; }
+    function mod(v, m) { v = v % m; return v < 0 ? v + m : v; }
+
+    // ---- single render path shared by rAF playback and manual step() ----
+    function render() {
+      var p = state.phase;
+      var deg = p * 360;                  // clockwise = forward motion to the right
+      var rad = p * 2 * Math.PI;
+      var tw = Math.sin(2 * rad);         // two strokes per revolution
+
+      R.wheelRear.setAttribute('transform', rot(deg, REAR));
+      R.wheelFront.setAttribute('transform', rot(deg, FRONT));
+      R.crankNear.setAttribute('transform', rot(deg, CRANK));
+      R.crankFar.setAttribute('transform', rot(deg, CRANK));
+      R.chainring.setAttribute('transform', rot(deg, CRANK));
+
+      var pa = { x: CRANK.x + CRANK_R * Math.cos(rad), y: CRANK.y + CRANK_R * Math.sin(rad) };
+      var pb = { x: CRANK.x - CRANK_R * Math.cos(rad), y: CRANK.y - CRANK_R * Math.sin(rad) };
+      R.pedalA.setAttribute('transform', tr(pa.x, pa.y));
+      R.pedalB.setAttribute('transform', tr(pb.x, pb.y));
+
+      // slight ankling: toe dips on the down stroke
+      var tiltA = 8 * Math.sin(rad), tiltB = -8 * Math.sin(rad);
+      var fa = { x: pa.x, y: pa.y - SOLE }, fb = { x: pb.x, y: pb.y - SOLE };
+      R.footA.setAttribute('transform', tr(fa.x, fa.y) + ' rotate(' + (tiltA * 0.4).toFixed(3) + ')');
+      R.footB.setAttribute('transform', tr(fb.x, fb.y) + ' rotate(' + (tiltB * 0.4).toFixed(3) + ')');
+
+      function ankleOf(f, tilt) {
+        var t = tilt * 0.4 * Math.PI / 180, c = Math.cos(t), s = Math.sin(t);
+        return { x: f.x + ANKLE.x * c - ANKLE.y * s, y: f.y + ANKLE.x * s + ANKLE.y * c };
+      }
+      var aa = ankleOf(fa, tiltA), ab = ankleOf(fb, tiltB);
+      var ka = knee(HIP_A, aa), kb = knee(HIP_B, ab);
+      var tA = seg(HIP_A, ka), sA = seg(ka, aa);
+      R.aThigh.setAttribute('d', tA); R.aThighOl.setAttribute('d', tA);
+      R.aShin.setAttribute('d', sA); R.aShinOl.setAttribute('d', sA);
+      R.aKnee.setAttribute('cx', ka.x.toFixed(2)); R.aKnee.setAttribute('cy', ka.y.toFixed(2));
+      var tB = seg(HIP_B, kb);
+      R.bThigh.setAttribute('d', tB); R.bThighOl.setAttribute('d', tB);
+      R.bShin.setAttribute('d', seg(kb, ab));
+      R.bKnee.setAttribute('cx', kb.x.toFixed(2)); R.bKnee.setAttribute('cy', kb.y.toFixed(2));
+
+      // body rocks around the hip (hip stays on the saddle), head bobs, wings sway
+      R.torso.setAttribute('transform', 'rotate(' + (0.9 * Math.sin(rad)).toFixed(3) + ' ' + HIP_A.x + ' ' + HIP_A.y + ')');
+      R.head.setAttribute('transform', 'translate(0 ' + (1.6 * tw).toFixed(3) + ') rotate(' + (1.2 * Math.sin(2 * rad + 0.8)).toFixed(3) + ' 466 112)');
+      R.wingNear.setAttribute('transform', 'rotate(' + (0.7 * tw).toFixed(3) + ' 556 262)');
+      R.wingFar.setAttribute('transform', 'rotate(' + (-0.7 * tw).toFixed(3) + ' 538 242)');
+
+      // chain + scrolling ground (all offsets wrap exactly once per cycle)
+      R.chain.setAttribute('stroke-dashoffset', (-mod(p * CHAIN_CIRC, CHAIN_TILE)).toFixed(4));
+      var road = mod(p * WHEEL_CIRC, ROAD_TILE);
+      R.marks.setAttribute('transform', tr(-road, 0));
+      R.tufts.setAttribute('transform', tr(-mod(p * WHEEL_CIRC, ROAD_TILE / 2), 0));
+      R.trees.setAttribute('transform', tr(-mod(p * TREE_TILE, TREE_TILE), 0));
+      R.hillsNear.setAttribute('transform', tr(-mod(p * HILL_NEAR, HILL_NEAR), 0));
+      R.hillsFar.setAttribute('transform', tr(-mod(p * HILL_FAR, HILL_FAR), 0));
+    }
+
+    function renderControls() {
+      var lbl = state.paused ? '继续' : '暂停';
+      $('icon-pause').setAttribute('display', state.paused ? 'none' : 'inline');
+      $('icon-play').setAttribute('display', state.paused ? 'inline' : 'none');
+      $('play-label').textContent = lbl;
+      $('play-title').textContent = lbl;
+      R.play.setAttribute('aria-label', lbl);
+      R.play.setAttribute('aria-pressed', state.paused ? 'true' : 'false');
+      $('speed-label').textContent = state.rate + '× 速度';
+      $('speed-title').textContent = '切换速度（当前 ' + state.rate + '×）';
+      R.speed.setAttribute('aria-label', '速度 ' + state.rate + ' 倍，点击切换到 ' + (state.rate === 1 ? 2 : 1) + ' 倍');
+      $('speed-needle').setAttribute('d', state.rate === 1 ? 'M28 28 L22 19' : 'M28 28 L35 19');
+    }
+
+    function advance(seconds) {
+      if (state.paused) return;
+      var s = Number(seconds);
+      if (!isFinite(s)) return;
+      state.phase = mod(state.phase + s * state.rate / CYCLE, 1);
+      if (state.phase >= 1) state.phase = 0;
+    }
+
+    function togglePause() { state.paused = !state.paused; lastT = null; renderControls(); render(); }
+    function toggleSpeed() { state.rate = state.rate === 1 ? 2 : 1; renderControls(); render(); }
+
+    function bindButton(node, fn) {
+      node.addEventListener('click', function (e) { e.preventDefault(); fn(); });
+      node.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); fn(); }
+      });
+    }
+    bindButton(R.play, togglePause);
+    bindButton(R.speed, toggleSpeed);
+
+    function frame(t) {
+      if (lastT === null || manual || state.paused) {
+        lastT = t;
+      } else {
+        var dt = Math.min(0.1, Math.max(0, (t - lastT) / 1000));
+        lastT = t;
+        advance(dt);
+        render();
+      }
+      requestAnimationFrame(frame);
+    }
+
+    window.benchPelican = {
+      getState: function () { return { phase: state.phase, paused: state.paused, rate: state.rate }; },
+      setManualMode: function (flag) { manual = !!flag; lastT = null; },
+      step: function (seconds) { advance(seconds); render(); return this.getState(); },
+      reset: function () {
+        state.phase = 0; state.rate = 1; state.paused = false; lastT = null;
+        renderControls(); render();
+        return this.getState();
+      },
+      togglePlay: togglePause,
+      toggleSpeed: toggleSpeed
+    };
+
+    renderControls();
+    render();
+    requestAnimationFrame(frame);
+  })();
+  ]]></script>
+</svg>
