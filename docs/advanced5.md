@@ -1,6 +1,6 @@
 # Advanced5 进阶题
 
-Advanced5 共 5 题、12 轮。默认题库 `v3-combined10` 取其中 3 题，排除场地复核和签收更新。`v3-combined11` 取其中 4 题，排除场地复核。可用 `--suite v3-advanced5` 单独运行全部 5 题。
+Advanced5 共 5 题、12 轮。`v3-combined20` 和 `v3-combined10` 取其中 3 题，排除场地复核和签收更新。`v3-combined11` 取其中 4 题，排除场地复核。可用 `--suite v3-advanced5` 单独运行全部 5 题。
 
 | 题目 | 主要验收 |
 |---|---|

@@ -1,6 +1,6 @@
 # Guard4 防守题
 
-`v3-guard4` 共 4 题、10 轮，纳入默认的 `v3-combined10` 和旧版 `v3-combined11`，也可单独运行。题目从已停用的 standard20 移植并加难。程序检查结果写入每轮 `checks`，结合语义评审判定。
+`v3-guard4` 共 4 题、10 轮，纳入 `v3-combined20`、`v3-combined10` 和 `v3-combined11`，也可单独运行。题目从已停用的 standard20 移植并加难。程序检查结果写入每轮 `checks`，结合语义评审判定。
 
 | 题目 | 主要验收 | 程序判定 |
 |---|---|---|

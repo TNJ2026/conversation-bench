@@ -1,6 +1,6 @@
 # Challenge3 高难度挑战
 
-`v3-challenge3` 共 3 题、7 轮，纳入默认的 `v3-combined10` 及旧版 `v3-combined8` 和 `v3-combined11`。也可单独运行。
+`v3-challenge3` 共 3 题、7 轮，纳入 `v3-combined20`、`v3-combined10`、`v3-combined11` 和 `v3-combined8`。也可单独运行。
 
 | 用例 | 主要验收 |
 |---|---|
@@ -33,4 +33,4 @@ python3 codexrun.py export --study studies/codex-sol-medium-challenge3-1
 
 `export` 将回归结果关联到补货修复 R2。应在导出前运行回归，导出后修改记录会使旧评分绑定失效。
 
-挑战题单独报告得分：`report` 的评审总分按题组分行，Advanced5、Challenge3、Guard4 各算一行，运行合并题库时也不合并。保留各次重复和独立评审。文件和测试校验提供证据，不能从摘要或一轮的工具状态推断全部行为。
+挑战题单独报告得分。`report` 的评审总分按原始题组分行，保留各次重复和独立评审。文件和测试校验提供证据，不能从摘要或一轮的工具状态推断全部行为。

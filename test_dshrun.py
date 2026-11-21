@@ -116,12 +116,12 @@ class BatchTests(unittest.TestCase):
             dshrun.execute(output)
 
     def test_default_suite_prepares_all_cases_without_timed_intervention(self):
-        output=self.root/'combined10'
+        output=self.root/'combined20'
         dshrun.prepare(Namespace(dsh=str(self.binary),model='fixture',provider='fixture',effort='medium',timeout=5,
             suite=study.DEFAULT_SUITE,profile_patch=None,cases=None,output=str(output)))
         plan=study.load(output/'plan.json')
-        self.assertEqual(len(plan['jobs']),10)
-        self.assertEqual(sum(len(j['case']['turns']) for j in plan['jobs']),23)
+        self.assertEqual(len(plan['jobs']),20)
+        self.assertEqual(sum(len(j['case']['turns']) for j in plan['jobs']),43)
         self.assertTrue(all(j['case']['category']!='interrupt' for j in plan['jobs']))
         self.assertEqual(study.digest(plan),study.load(output/'plan-binding.json')['sha256'])
 

@@ -650,7 +650,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(run.summary()[3:],['1/4','无','—','通过 0／未通过 1／未评 4（共 5 条）','无','2 / 未评'])
 
     def test_command_line_defaults_and_number_validation(self):
-        with project('fixture-lifecycle') as run:
+        with project('fixture-lifecycle') as run, patch.object(study, 'DEFAULT_SUITE', 'v3-combined10'):
             self.assertEqual(cli('list').split('\t')[0],'fixture-lifecycle')
             cli('begin','--plan',run.plan,'--job','J001','--model','m')
             run.path=run.plan.parent/'records'/'J001.json'

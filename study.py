@@ -15,17 +15,30 @@ import review_v3
 
 ROOT = Path(__file__).resolve().parent
 WORKSPACES = ROOT.parent/'conversation-bench-workspaces'
-DEFAULT_SUITE = 'v3-combined10'
+DEFAULT_SUITE = 'v3-combined20'
+COMPONENT_SUITES = ('v3-advanced5', 'v3-challenge3', 'v3-guard4')
+COMBINED10_EXCLUDED = ('adv-room-reassignment', 'adv-shipment-update')
 # Combined suites: (component suites, case IDs left out). Components stay frozen; a new
 # combination is a new suite name, so earlier plans keep resolving to the same cases.
 COMBINED_SUITES = {
     'v3-combined8': (('v3-advanced5', 'v3-challenge3'), ()),
     # Drops the room case (same update-then-revoke pattern as the shipment case) and adds Guard4.
-    'v3-combined11': (('v3-advanced5', 'v3-challenge3', 'v3-guard4'), ('adv-room-reassignment',)),
-    'v3-combined10': (('v3-advanced5', 'v3-challenge3', 'v3-guard4'),
-                      ('adv-room-reassignment', 'adv-shipment-update')),
+    'v3-combined11': (COMPONENT_SUITES, ('adv-room-reassignment',)),
+    'v3-combined10': (COMPONENT_SUITES, COMBINED10_EXCLUDED),
+    'v3-combined20': ((*COMPONENT_SUITES, 'v3-extension10'), COMBINED10_EXCLUDED),
 }
-COMPONENT_SUITES = ('v3-advanced5', 'v3-challenge3', 'v3-guard4')
+COMBINED20_GOALS = {
+    '授权与操作边界': ('adv-approved-picklist', 'adv-recover-routing-export',
+                    'guard-confirm-supersede', 'scope-clarify-recipient'),
+    '证据与来源判断': ('adv-invoice-partial', 'adv-authority-by-field',
+                    'adv-release-evidence-gates', 'evidence-as-of-cutoff'),
+    '工程修复': ('adv-repair-receipt-replay', 'repair-stable-priority',
+               'repair-atomic-batch', 'repair-overnight-window'),
+    '抗干扰': ('guard-pushback-shipping', 'guard-injection-vendor',
+              'guard-transcript-role', 'guard-hypothesis-boundary'),
+    '硬格式约束': ('guard-stacked-format', 'format-tsv-revision',
+                'format-csv-quoting', 'format-brief-revision'),
+}
 SUITES = (*COMBINED_SUITES, *COMPONENT_SUITES)
 DEFAULT_PRODUCTS = ('dsh', 'chatgpt')
 # Operator timing: reported on its own, never counted for or against the application.
@@ -98,8 +111,15 @@ def load_catalog(suite, root=None):
         return load(root/f'cases-{suite}.json')
     components, excluded = COMBINED_SUITES[suite]
     cases = [case for name in components for case in load(root/f'cases-{name}.json') if case['id'] not in excluded]
-    if len({case['id'] for case in cases}) != len(cases):
+    ids = {case['id'] for case in cases}
+    if len(ids) != len(cases):
         raise ValueError('合并题组包含重复的案例 ID')
+    if suite == 'v3-combined20':
+        grouped = [case_id for group in COMBINED20_GOALS.values() for case_id in group]
+        if len(COMBINED20_GOALS) != 5 or any(len(group) != 4 for group in COMBINED20_GOALS.values()):
+            raise ValueError('Combined20 必须包含 5 个测试目标，每个目标 4 题')
+        if sorted(grouped) != sorted(ids):
+            raise ValueError('Combined20 的案例必须分别归入唯一的测试目标')
     return cases
 
 def stamp():
@@ -638,7 +658,7 @@ def main():
     listing = sub.add_parser('list'); listing.add_argument('--suite', choices=SUITES, default=DEFAULT_SUITE)
     c=sub.add_parser('create'); c.add_argument('--cases'); c.add_argument('--products',type=product_list,default=DEFAULT_PRODUCTS,help='逗号分隔的应用：dsh,chatgpt,hermes；默认 dsh,chatgpt，可只选一个'); c.add_argument('--repeat',type=int,default=1); c.add_argument('--seed',type=int,default=42); c.add_argument('--mode',choices=['default','controlled'],default='default'); c.add_argument('--output')
     c.add_argument('--suite', choices=SUITES, default=DEFAULT_SUITE,
-                   help=f'默认 {DEFAULT_SUITE}（10 题）；也可选择旧合并题库或单个子题组')
+                   help=f'默认 {DEFAULT_SUITE}（20 题）；也可选择旧合并题库或单个子题组')
     for name in ('next','report','blind'):
         sub.add_parser(name).add_argument('--plan',required=True)
     b=sub.add_parser('begin'); b.add_argument('--plan',required=True); b.add_argument('--job',required=True); b.add_argument('--model',required=True)

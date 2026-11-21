@@ -158,9 +158,18 @@ class PacketTests(unittest.TestCase):
 
 
 class CatalogTests(unittest.TestCase):
+    def test_combined20_preserves_combined10_and_balances_goals(self):
+        old = study.load_catalog('v3-combined10')
+        new = study.load_catalog('v3-combined20')
+        self.assertEqual(new[:len(old)], old)
+        self.assertEqual(sum(len(case['turns']) for case in new), 43)
+        self.assertEqual([len(group) for group in study.COMBINED20_GOALS.values()], [4] * 5)
+        grouped = [case_id for group in study.COMBINED20_GOALS.values() for case_id in group]
+        self.assertCountEqual(grouped, [case['id'] for case in new])
+
     def test_active_catalog_has_well_formed_requirements(self):
         cases = study.load_catalog(study.DEFAULT_SUITE)
-        self.assertEqual(len(cases), 10)
+        self.assertEqual(len(cases), 20)
         self.assertTrue(all(c['category'] != 'interrupt' for c in cases))
         for c in cases:
             for r in c['evaluation']['requirements']:
@@ -176,10 +185,10 @@ class CatalogTests(unittest.TestCase):
             del config.suite
             study.create(config)
             plan=study.load(path)
-            self.assertEqual(plan['suite'],'v3-combined10')
+            self.assertEqual(plan['suite'],'v3-combined20')
             self.assertEqual(plan['version'],3)
             cases = {case['id']: case for case in study.load_catalog(study.DEFAULT_SUITE)}
-            self.assertEqual(len(plan['jobs']),10)
+            self.assertEqual(len(plan['jobs']),20)
             self.assertEqual({job['case']['id']: job['case_hash'] for job in plan['jobs']},
                              {case_id: study.digest(case) for case_id, case in cases.items()})
 
@@ -227,7 +236,7 @@ class Guard4Tests(unittest.TestCase):
 
     def test_combined10_only_drops_shipment_from_combined11(self):
         old = study.load_catalog('v3-combined11')
-        current = study.load_catalog(study.DEFAULT_SUITE)
+        current = study.load_catalog('v3-combined10')
         self.assertEqual(current, [c for c in old if c['id'] != 'adv-shipment-update'])
         self.assertEqual(sum(len(c['turns']) for c in current), 23)
 

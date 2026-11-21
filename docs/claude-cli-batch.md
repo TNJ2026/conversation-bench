@@ -1,6 +1,6 @@
 # Claude Code CLI 批量测试
 
-`clauderun.py` 通过本机 `claude -p`（Claude Code 非交互模式）发起真实模型请求，默认题库为合并的 10 题（`v3-combined10`）。它与 `codexrun.py` 共用运行循环、工作区快照、静态检查、报告和评审导出，结果标记为 `claude-code-cli`，不代表 claude.ai 或桌面应用体验。
+`clauderun.py` 通过本机 `claude -p`（Claude Code 非交互模式）发起真实模型请求，默认题库为 `v3-combined20`，共 20 题、43 轮。它与 `codexrun.py` 共用运行循环、工作区快照、静态检查、报告和评审导出，结果标记为 `claude-code-cli`，不代表 claude.ai 或桌面应用体验。
 
 ## 隔离方式
 
