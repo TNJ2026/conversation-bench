@@ -30,4 +30,4 @@ python3 study.py create --suite v3-combined20 --output studies/combined20/plan.j
 python3 study.py list --suite v3-combined10
 ```
 
-五个测试目标的案例归属由 `study.py` 中的 `COMBINED20_GOALS` 定义。现有 `report` 仍按来源题组分行，新增题归在 `v3-extension10`。[评分协议](conversation-evaluation-v3.md)
+五个测试目标的案例归属由 `study.py` 中的 `COMBINED20_GOALS` 定义。`report` 按来源题组分行，新增题归在 `v3-extension10`；导出包含全部 20 题时，另给五个测试目标各一行和 Combined20 总行，均按题等权。[评分协议](conversation-evaluation-v3.md)

@@ -318,5 +318,172 @@ class ExtensionHiddenRegressionTests(unittest.TestCase):
         self.assertEqual(review.recorded_verifications(other), {})
 
 
+class ScoringRuleTests(unittest.TestCase):
+    """Validation rules from the scoring review: applicable dimensions, factual partials,
+    usefulness cap and decisive exact checks."""
+
+    def setUp(self):
+        from test_review_v3 import scoring_fixtures
+        self.fixtures = scoring_fixtures()
+
+    def packet(self, key, answer='周三14:00在A室开读书会。', links=()):
+        case = self.fixtures[key]
+        sample = review.sample_of(dict(status='completed', case=case, turns=[
+            dict(prompt=case['turns'][0]['prompt'], answer=answer)]), 'P001-A')
+        sample['turns'][0]['requirement_checks'] = list(links)
+        sample['sample_sha256'] = review.digest({k: v for k, v in sample.items() if k != 'sample_sha256'})
+        return {'version': 3, 'protocol': review.PROTOCOL, 'rubric': review.RUBRIC, 'samples': [sample]}
+
+    def sheet(self, packet, statuses, fact=None, instruction=None, usefulness=None, counts=(0, 0)):
+        sample = packet['samples'][0]
+        turn = review.blank_turn(sample, 1)
+        for row, status in zip(turn['requirements'], statuses):
+            row.update(status=status, note='' if status == 'met' else '具体原因说明充分')
+        quote = [{'kind': 'answer', 'turn': 1, 'quote': sample['turns'][0]['answer']}]
+        for field, score in zip(review.FIELDS, (fact, instruction, usefulness)):
+            turn[field].update(score=score, reason='依据说明充分足够', evidence=quote if score else [])
+        turn['factuality']['counts'].update(critical=counts[0], minor=counts[1])
+        return dict(version=3, packet_sha256=review.digest(packet), reviewer='r', review_type='human', model='',
+                    independent=True, samples=[dict(id='P001-A', sample_sha256=sample['sample_sha256'],
+                                                    corrections='未观察到纠正', turns=[turn])])
+
+    def validate(self, packet, sheet):
+        return review.validate_sheet(sheet, packet, review.digest(packet))
+
+    def test_dimension_without_requirement_must_be_blank(self):
+        packet = self.packet('refund-fixture')  # F I I, no usefulness requirement
+        self.validate(packet, self.sheet(packet, ['met'] * 3, fact=5, instruction=5))
+        with self.assertRaisesRegex(ValueError, '没有usefulness类要求'):
+            self.validate(packet, self.sheet(packet, ['met'] * 3, fact=5, instruction=5, usefulness=5))
+        packet = self.packet('length-fixture')  # instruction only
+        with self.assertRaisesRegex(ValueError, '没有factuality类要求'):
+            self.validate(packet, self.sheet(packet, ['met'], fact=5, instruction=5))
+
+    def test_factual_partial_caps_at_three_without_forcing_a_critical(self):
+        packet = self.packet('brief-fixture')  # F(c) I(c) F(c) U
+        self.validate(packet, self.sheet(packet, ['partial', 'met', 'met', 'met'], fact=3, instruction=5,
+                                         usefulness=5, counts=(0, 2)))
+        self.validate(packet, self.sheet(packet, ['partial', 'met', 'met', 'met'], fact=2, instruction=5,
+                                         usefulness=5, counts=(1, 0)))
+        with self.assertRaisesRegex(ValueError, '未计入'):
+            self.validate(packet, self.sheet(packet, ['partial', 'met', 'met', 'met'], fact=4, instruction=5,
+                                             usefulness=5, counts=(0, 1)))
+        # A missed critical fact is still at least one critical error.
+        with self.assertRaisesRegex(ValueError, '未计入'):
+            self.validate(packet, self.sheet(packet, ['missed', 'met', 'met', 'met'], fact=3, instruction=5,
+                                             usefulness=5, counts=(0, 2)))
+        # Two wrong facts in one bundled requirement are counted as two.
+        self.validate(packet, self.sheet(packet, ['missed', 'met', 'met', 'met'], fact=1, instruction=5,
+                                         usefulness=5, counts=(2, 0)))
+
+    def test_missed_usefulness_requirement_caps_usefulness(self):
+        packet = self.packet('brief-fixture')
+        self.validate(packet, self.sheet(packet, ['met', 'met', 'met', 'missed'], fact=5, instruction=5, usefulness=4))
+        with self.assertRaisesRegex(ValueError, '最高4分'):
+            self.validate(packet, self.sheet(packet, ['met', 'met', 'met', 'partial'], fact=5, instruction=5, usefulness=5))
+
+    def test_failed_decisive_check_only_allows_missed(self):
+        link = dict(id='R2', check='整条回复与约定文本一致', **{'pass': False}, decisive=True)
+        packet = self.packet('brief-fixture', links=[link])
+        for status in ('partial', 'na'):
+            with self.subTest(status=status), self.assertRaisesRegex(ValueError, '只能判missed'):
+                self.validate(packet, self.sheet(packet, ['met', status, 'met', 'met'], fact=5,
+                                                 instruction=3 if status == 'partial' else None, usefulness=5))
+        self.validate(packet, self.sheet(packet, ['met', 'missed', 'met', 'met'], fact=5, instruction=2, usefulness=5))
+        soft = dict(link); soft.pop('decisive')
+        packet = self.packet('brief-fixture', links=[soft])
+        self.validate(packet, self.sheet(packet, ['met', 'partial', 'met', 'met'], fact=5, instruction=3, usefulness=5))
+
+    def test_exact_links_are_marked_decisive(self):
+        c = cases()['format-csv-quoting']
+        rows = [dict(check='整条回复与约定文本一致', **{'pass': False})]
+        self.assertEqual(review.requirement_links(c, 1, rows),
+                         [dict(id='R1', check='整条回复与约定文本一致', **{'pass': False}, decisive=True)])
+        stacked = cases()['guard-stacked-format']
+        self.assertNotIn('decisive', review.requirement_links(stacked, 2, [dict(check='恰好两句', **{'pass': False})])[0])
+
+
+class Combined20TotalTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.folder = Path(self.temp.name)
+
+    def records(self, unfinished=()):
+        out = []
+        for n, c in enumerate(study.load_catalog('v3-combined20'), 1):
+            turns = c['turns'][:1] if c['id'] in unfinished else c['turns']
+            out.append(dict(job=f'J{n:03}', product='A01', status='failed' if c['id'] in unfinished else 'completed',
+                            case=c, initial_files={}, turns=[dict(prompt=t['prompt'], answer='作答内容示例文本', checks=[],
+                                                                   files={}, artifacts={}) for t in turns]))
+        return out
+
+    def score(self, records, usefulness_by_goal):
+        goal_of = {i: g for g, ids in study.COMBINED20_GOALS.items() for i in ids}
+        with patch.object(review, 'recorded_verifications', return_value={}):
+            path = review.export(self.folder, [{'A01': r} for r in records])
+        packet = study.load(path/'review.json')
+        sheet = study.load(path/'scores-r1.json')
+        sheet.update(reviewer='r', review_type='human', independent=True)
+        for row, sample in zip(sheet['samples'], packet['samples']):
+            row['corrections'] = '未观察到纠正'
+            for turn in row['turns']:
+                for req in turn.get('requirements', []): req.update(status='met')
+                quote = [{'kind': 'answer', 'turn': turn['number'], 'quote': '作答内容示例文本'}]
+                for field in review.FIELDS:
+                    has = any(r['dimension'] == review.DIMENSION[field] for r in turn.get('requirements', []))
+                    score = (usefulness_by_goal[goal_of[sample['case']['id']]] if field == 'usefulness' else 5) if has else None
+                    turn[field].update(score=score, reason='逐项核对后的说明文字', evidence=quote if has else [])
+        study.save(path/'scores-r1.json', sheet)
+        return {row['suite']: row for row in review.totals(self.folder, records)}
+
+    def expected(self, records, usefulness_by_goal, unfinished=()):
+        goal_of = {i: g for g, ids in study.COMBINED20_GOALS.items() for i in ids}
+        per_case = {}
+        for record in records:
+            c = record['case']; submitted = len(record['turns'])
+            dims = {}
+            for field, dim in review.DIMENSION.items():
+                marks = []
+                for number in range(1, len(c['turns']) + 1):
+                    if any(r['dimension'] == dim and number in r['active_turns'] for r in c['evaluation']['requirements']):
+                        good = usefulness_by_goal[goal_of[c['id']]] if field == 'usefulness' else 5
+                        marks.append(good if number <= submitted else review.UNSUBMITTED_SCORE)
+                if marks: dims[field] = sum(marks) / len(marks)
+            per_case[c['id']] = sum(dims.values()) / len(dims)
+        goals = {g: sum(per_case[i] for i in ids) / 4 * 20 for g, ids in study.COMBINED20_GOALS.items()}
+        return goals, sum(per_case.values()) / 20 * 20
+
+    def test_goal_and_combined20_rows_weight_cases_equally(self):
+        usefulness = dict(zip(study.COMBINED20_GOALS, (5, 4, 3, 2, 1)))
+        records = self.records()
+        rows = self.score(records, usefulness)
+        goals, overall = self.expected(records, usefulness)
+        self.assertEqual({'v3-advanced5', 'v3-challenge3', 'v3-guard4', 'v3-extension10'} <= set(rows), True)
+        for goal, value in goals.items():
+            row = rows[f'{review.COMBINED20}·{goal}']
+            self.assertAlmostEqual(row['total'], value, msg=goal)
+            self.assertEqual(row['samples'], 4)
+        self.assertAlmostEqual(rows[review.COMBINED20]['total'], overall)
+        self.assertEqual(rows[review.COMBINED20]['samples'], 20)
+        self.assertIn('Combined20·硬格式约束', review.totals_markdown(list(rows.values())))
+
+    def test_unfinished_attempt_is_penalised_not_dropped(self):
+        usefulness = dict.fromkeys(study.COMBINED20_GOALS, 5)
+        dropped = 'adv-release-evidence-gates'  # three turns, stops after the first
+        records = self.records(unfinished=(dropped,))
+        rows = self.score(records, usefulness)
+        goals, overall = self.expected(records, usefulness, unfinished=(dropped,))
+        self.assertLess(overall, 100)
+        self.assertAlmostEqual(rows[review.COMBINED20]['total'], overall)
+        self.assertEqual((rows[review.COMBINED20]['samples'], rows[review.COMBINED20]['unfinished']), (20, 1))
+        self.assertAlmostEqual(rows['Combined20·证据与来源判断']['total'], goals['证据与来源判断'])
+
+    def test_partial_export_has_no_combined20_row(self):
+        records = [r for r in self.records() if r['case']['id'] != 'format-brief-revision']
+        rows = self.score(records, dict.fromkeys(study.COMBINED20_GOALS, 5))
+        self.assertNotIn(review.COMBINED20, rows)
+        self.assertFalse(any(key.startswith(review.COMBINED20) for key in rows))
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -11,9 +11,9 @@ DIMENSION = {'factuality': 'factuality', 'instruction_following': 'instruction',
 STATUSES = ('met', 'partial', 'missed', 'na')
 MIN_QUOTE = 4
 RUBRIC = {
-    'factuality': '只评可核实的事实陈述。先判是否适用/证据充分；否则score=null并说明。编造来源、读取或验证证据，或>=2个关键事实错误=1；恰1个关键事实错误且无编造证据=2；无关键错但>=2个次要事实错误/无依据事实=3；恰1个次要问题=4；无已发现问题=5。dimension=factuality的本轮要求未满足或部分满足时，必须按其重要性计入counts；清单外另发现的事实错误可再加。虚构创作、明确假设与允许的推断不计事实错误。不得把“资料没提供”自动判成错误。无依据断言只在确定语气时计入：用确定语气陈述材料之外的内容计1个次要问题，带“可能、估计、假设、需确认”等限定或属于允许的推断不计，同一说法同一轮只计一次；影响结论、授权边界或执行条件的按关键问题计。',
+    'factuality': '本轮有dimension=factuality的要求时才评分，否则score须为null。一条要求包含多个独立事实时，按实际出错的独立事实分别计数，不因清单把几个事实写在同一条而少计；关键事实要求判missed至少计1个关键错误，判partial时分数最高3分（相当于至少2个次要问题），其中确有关键事实错误的按关键计。只评可核实的事实陈述。先判是否适用/证据充分；否则score=null并说明。编造来源、读取或验证证据，或>=2个关键事实错误=1；恰1个关键事实错误且无编造证据=2；无关键错但>=2个次要事实错误/无依据事实=3；恰1个次要问题=4；无已发现问题=5。dimension=factuality的本轮要求未满足或部分满足时，必须按其重要性计入counts；清单外另发现的事实错误可再加。虚构创作、明确假设与允许的推断不计事实错误。不得把“资料没提供”自动判成错误。无依据断言只在确定语气时计入：用确定语气陈述材料之外的内容计1个次要问题，带“可能、估计、假设、需确认”等限定或属于允许的推断不计，同一说法同一轮只计一次；影响结论、授权边界或执行条件的按关键问题计。',
     'instruction_following': '分数由本轮dimension=instruction的要求状态自动推导，不另填计数：关键missed>=2=1；关键missed=1为2；关键partial或次要missed/partial>=2为3；恰1项次要未满足为4；全部满足为5。只填requirements中各要求状态，na表示本轮无法判定且需说明；某维度有na要求时，该维度score须为null。事实类要求只计事实维度，同一问题不跨维度重复扣分。本轮没有dimension=instruction的要求时score须为null。字数上限按整条回复的全部非空白字符计（含标点、Markdown及交付物之外的说明），正文单独达标而整条回复超限判未满足。',
-    'usefulness': '结合该用例的5/3/1锚点评估当轮产物。5=可直接用于指定目的；4=仅局部措辞/排版小改，不需新增事实或重排核心结构；3=需补充关键步骤或重组后才能用；2=只可保留零散内容，核心产物需重做；1=不可用或会误导行动。dimension=usefulness的要求（如未经要求的主动识别）只在此维度参考，不计入事实或指令。无法看到所需产物时score=null，不根据“已完成”措辞猜测可用性。',
+    'usefulness': '本轮有dimension=usefulness的要求时才评分，否则score须为null；该类要求有missed或partial时最高4分。结合该用例的5/3/1锚点评估当轮产物。5=可直接用于指定目的；4=仅局部措辞/排版小改，不需新增事实或重排核心结构；3=需补充关键步骤或重组后才能用；2=只可保留零散内容，核心产物需重做；1=不可用或会误导行动。dimension=usefulness的要求（如未经要求的主动识别）只在此维度参考，不计入事实或指令。无法看到所需产物时把usefulness类要求判na并令score=null，不根据“已完成”措辞猜测可用性。',
 }
 PROTOCOL = {
     'version': 3,
@@ -21,10 +21,10 @@ PROTOCOL = {
     'completion': 'coverage单列计划/已提交/未提交轮次及终止状态。失败仍保留；未提交轮次不计满分、不计未知事实错误。任务完成度不得从三维文字分数推导。',
     'importance': 'critical=错误/遗漏会改变事实结论、授权边界、执行条件，或违反明确交付硬约束；minor=不改变这些内容的局部说明/风格要求。以逐例requirements为准，协议是否执行不计模型分。',
     'correction': '逐轮保留分数，另填corrections说明在哪一轮主动修正/经提示修正/仍未修正；后续修正不覆盖前轮分数。',
-    'total': '每次作答先按轮平均各维度，再平均该次有分的维度；同题先平均有效复测，再按题等权换算为百分制。适用维度有空分的作答不计入并单列；已有完成作答的题若无有效评分，则暂不发布该题组总分。未完成作答和复测覆盖单列，各题组和评审分别汇总。裁决须有两份有效的独立评分。',
+    'total': '每次作答先按轮平均各维度，再平均该次有分的维度；同题先平均有效复测，再按题等权换算为百分制。未完成作答照常计分：已提交轮次按评分，未提交的计划轮次在其有要求的维度各计1分。因na要求留空的维度不计入均值并单列“不可判定”；适用维度没有na却留空的作答记为缺评，某题若无有效评分则暂不发布该行总分。各题组和评审分别汇总；导出含全部Combined20题时另给五个测试目标和Combined20总行，均按题等权。裁决须有两份有效的独立评分。',
     'independence': 'r1与r2必须先独立填写各自副本，不看对方分数；填不同reviewer和真实review_type。AI评审填写model。独立性属于声明，软件不能证明。',
     'disagreement': '逐轮逐维比较两评；任一分歧保留双方证据，第三位评审填写scores-adjudicated.json及裁决原因。未裁决不合成分数；不求平均。',
-    'checks': '要求可关联自动检查（samples[].turns[].requirement_checks）。关联检查本轮未通过时，该要求只能判partial、missed或na，判met会被拒收；检查待人工（pass=null）时不约束。检查通过不代表要求满足：字面匹配会漏掉换说法的违规，仍由评审判断。',
+    'checks': '要求可关联自动检查（samples[].turns[].requirement_checks）。关联检查本轮未通过时，该要求只能判partial、missed或na，判met会被拒收；标有decisive的整条精确匹配未通过时只能判missed。检查待人工（pass=null）时不约束。检查通过不代表要求满足：字面匹配会漏掉换说法的违规，仍由评审判断。',
     'evidence': f'每个数值评分都需该轮答案/产物/要求/来源的精确引用和解释，引文至少{MIN_QUOTE}个非空白字符（引用整段短文本除外）；缺失问题可用kind=requirement引用本轮生效的要求原文。要求状态和计数只做结构一致性验证，不是语义真伪证明。',
     'limits': '静态文件快照不能证明从未写入；未提供工具记录/观察证据时，执行行为不可判定。运行方式完整记录每轮工具调用（批量脚本）时，执行证据为空即视为未调用工具，“不联网”“不写文件”等要求判满足。材料/文本可能透露应用身份，分享前检查，不能保证完全匿名。',
 }
@@ -78,6 +78,10 @@ def requirement_links(case, number, checks):
     links = case.get('auto') or {}
     requirements = (case.get('evaluation') or {}).get('requirements') or []
     by_text = {r['text']: r['id'] for r in requirements}
+    specs = case.get('turns') or []
+    rules = specs[number-1].get('checks', []) if 0 < number <= len(specs) else []
+    # A whole-reply exact match leaves nothing partly right: when it fails, the requirement is missed.
+    decisive = {rule.get('label', '回答与指定值一致') for rule in rules if rule.get('kind') == 'exact'}
     rows = []
     for criterion, pairs in links.items():
         if criterion not in by_text: continue
@@ -85,7 +89,9 @@ def requirement_links(case, number, checks):
             if turn not in (None, number): continue
             for check in checks:
                 if same_check(check['check'], name):
-                    rows.append(dict(id=by_text[criterion], check=check['check'], **{'pass': check['pass']}))
+                    row = dict(id=by_text[criterion], check=check['check'], **{'pass': check['pass']})
+                    if check['check'] in decisive: row['decisive'] = True
+                    rows.append(row)
     return rows
 
 
@@ -244,7 +250,9 @@ def render_markdown(packet):
                 out += ['**自动检查**', ''] + [f'- {mark[c["pass"]]} · {c["check"]}：{c["detail"]}' for c in turn['checks']] + ['']
             if turn.get('requirement_checks'):
                 mark = {True: '通过', False: '**未通过，该要求不得判met**', None: '待人工，不约束'}
-                out += ['**要求关联的自动检查**', ''] + [f'- {x["id"]} ← {x["check"]}：{mark[x["pass"]]}' for x in turn['requirement_checks']] + ['']
+                show = lambda x: ('**未通过（整条精确匹配），该要求只能判missed**'
+                                  if x['pass'] is False and x.get('decisive') else mark[x['pass']])
+                out += ['**要求关联的自动检查**', ''] + [f'- {x["id"]} ← {x["check"]}：{show(x)}' for x in turn['requirement_checks']] + ['']
             evidence = turn['execution_evidence']
             if evidence:
                 out += [f'<details><summary>执行证据（{len(evidence)} 条，引用时用 kind=execution 与 index）</summary>', '']
@@ -283,9 +291,10 @@ def export(folder, groups):
         '指令分由instruction类要求的状态推导；事实类要求的未满足项必须计入factuality counts，清单外事实错误可另加；usefulness类要求只供实用性参考。同一问题不跨维度重复扣分。\n\n'
         '每维 reason 写具体解释；evidence 是精确引文列表，引文至少4个非空白字符（除非引用整段短文本）。例如 {"kind":"answer","turn":1,"quote":"原文片段"}；'
         '其他kind有 prompt、intervention、operator_notes（操作员声明）、artifact（还需name文件名）、material（需name，不需turn）、execution（需turn和index）、requirement（需id，只能引用本轮生效的要求）。'
-        '引用不得跨越当前评分轮次。未知或不适用留score=null并说明原因。\n\n'
+        '引用不得跨越当前评分轮次。某维度只在本轮有该维度要求时评分，否则score=null；无法判定时把对应要求判na、score=null并说明原因。'
+        '关键事实要求判partial时事实分最高3分；usefulness类要求未满足时实用性最高4分；整条精确匹配（decisive）未通过的要求只能判missed。\n\n'
         '按rubric确定score；不要把程序验引文通过当语义正确。每个sample的corrections记录纠正情况，没有则写“未观察到纠正”。\n\n'
-        '未完成的会话只评已观察轮次，不补写未来分数。任务完成情况与质量分并列；报告只按固定口径为每位评审分别计算总分，不跨评审平均。'
+        '未完成的会话只评已观察轮次，不补写未来分数；总分会把未提交轮次在其适用维度计为1分。任务完成情况与质量分并列；报告只按固定口径为每位评审分别计算总分，不跨评审平均。'
         '两评不一致时由第三位评审填写scores-adjudicated.json，保留原双评分并写裁决原因。\n', encoding='utf-8')
     return destination
 
@@ -364,16 +373,21 @@ def validate_sheet(sheet, packet, packet_hash, adjudicated=False):
             for link in sample['turns'][turn['number']-1].get('requirement_checks', []):
                 if link['pass'] is False and statuses.get(link['id']) == 'met':
                     raise ValueError(f'第{turn["number"]}轮{link["id"]}关联的自动检查“{link["check"]}”未通过，该要求不得判met')
+                if link['pass'] is False and link.get('decisive') and statuses.get(link['id']) in ('partial', 'na'):
+                    raise ValueError(f'第{turn["number"]}轮{link["id"]}关联的整条精确匹配“{link["check"]}”未通过，该要求只能判missed')
             derived = {}
             if active:
                 critical, partial, minor = requirement_counts(active, statuses, 'instruction')
                 derived['instruction_following'] = dict(critical_missed=critical, critical_partial=partial, minor_missed=minor)
                 derived['factuality'] = requirement_counts(active, statuses, 'factuality')
             graded = bool((sample['case'].get('evaluation') or {}).get('requirements'))
-            value = turn.get('instruction_following')
-            if (graded and isinstance(value, dict) and value.get('score') is not None
-                    and not any(dimension_of(r) == 'instruction' for r in active)):
-                raise ValueError('本轮没有instruction类要求，instruction_following的score须为null')
+            # A dimension is scored exactly when the turn has a requirement of that dimension, so
+            # reviewers cannot change a total by choosing whether to score an optional dimension.
+            for field in FIELDS:
+                value = turn.get(field)
+                if (graded and isinstance(value, dict) and value.get('score') is not None
+                        and not any(dimension_of(r) == DIMENSION[field] for r in active)):
+                    raise ValueError(f'本轮没有{DIMENSION[field]}类要求，{field}的score须为null')
             for field in FIELDS:
                 value = turn.get(field)
                 if not isinstance(value, dict): continue
@@ -396,6 +410,10 @@ def validate_sheet(sheet, packet, packet_hash, adjudicated=False):
                 refs = value.get('evidence')
                 if not isinstance(refs, list) or (score is not None and not refs): raise ValueError('数值评分缺少证据')
                 for ref in refs: verify_quote(ref, sample, turn['number'])
+                if score is not None and field == 'usefulness':
+                    own = [statuses[r['id']] for r in active if dimension_of(r) == 'usefulness']
+                    if score == 5 and any(mark in ('missed', 'partial') for mark in own):
+                        raise ValueError('usefulness类要求未满足或部分满足，实用性最高4分')
                 if score is None or field == 'usefulness': continue
                 counts = value.get('counts')
                 if field == 'instruction_following' and active:
@@ -405,7 +423,12 @@ def validate_sheet(sheet, packet, packet_hash, adjudicated=False):
                 if field == 'factuality' and active:
                     expected_score(field, counts)  # validates the structure first
                     critical, partial, minor = derived['factuality']
-                    if counts['critical'] < critical + partial or counts['minor'] < minor:
+                    # A missed critical fact is a critical error. A partly met critical fact caps the
+                    # score at 3, like a critical partial in instruction; the reviewer counts a real
+                    # critical error inside it as critical, so scoring never depends on how many facts
+                    # one requirement bundles.
+                    ceiling = expected_score(field, dict(critical=critical, minor=minor + 2*partial, fabricated_evidence=False))
+                    if counts['critical'] < critical or score > ceiling:
                         raise ValueError('事实类要求未满足，但factuality计数未计入')
                 if score != expected_score(field, counts):
                     raise ValueError('分数与错误严重程度/数量不一致')
@@ -452,6 +475,9 @@ def bound_sheets(folder, name, by_job):
     return packet, mapping, sheets, invalid
 
 
+UNSUBMITTED_SCORE = 1
+
+
 def sample_score(turns):
     """(mean of the dimensions that have a score, {dimension: mean over scored turns}); None when nothing is scored."""
     dims = {}
@@ -459,6 +485,40 @@ def sample_score(turns):
         marks = [t[field]['score'] for t in turns if t[field]['score'] is not None]
         if marks: dims[field] = sum(marks)/len(marks)
     return (sum(dims.values())/len(dims) if dims else None), dims
+
+
+def scored_turns(sample, row):
+    """Turn scores for the total, or None when a reviewer left an applicable dimension blank.
+
+    Returns (turns, undetermined): a blank dimension backed by an na requirement is left out of the
+    mean and counted as undetermined; planned turns that were never submitted score
+    UNSUBMITTED_SCORE in every dimension they have requirements for, so an unfinished attempt
+    weighs in the total instead of dropping the case.
+    """
+    turns = []; undetermined = 0
+    for turn in row['turns']:
+        active = active_requirements(sample, turn['number'])
+        statuses = {r.get('id'): r.get('status') for r in turn.get('requirements', [])}
+        marks = {}
+        for field in FIELDS:
+            own = [statuses.get(r['id']) for r in active if dimension_of(r) == DIMENSION[field]]
+            score = turn[field]['score']
+            if score is None and own:
+                if 'na' not in own:
+                    return None, 0
+                undetermined += 1
+            marks[field] = {'score': score}
+        turns.append(marks)
+    for number in sample['coverage']['missing_turns']:
+        active = active_requirements(sample, number)
+        turns.append({field: {'score': UNSUBMITTED_SCORE if any(dimension_of(r) == DIMENSION[field] for r in active) else None}
+                      for field in FIELDS})
+    return turns, undetermined
+
+
+def combined20_goals():
+    from study import COMBINED20_GOALS
+    return COMBINED20_GOALS
 
 
 def suite_of(case):
@@ -488,46 +548,61 @@ def totals(folder, records):
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             continue  # rows() reports the broken binding
         for slot, sheet in accepted_slots(sheets).items():
-            groups = {}
+            products = {}
             for sample, row in zip(packet['samples'], sheet['samples']):
                 record = by_job[mapping[sample['id']]]
-                key = record['product'], suite_of(record['case'])
-                cases = groups.setdefault(key, {})
-                case = cases.setdefault(record['case']['id'], dict(scores=[], dims={f: [] for f in FIELDS},
-                                                                   attempts=0, unfinished=0, unscored=0))
+                cases = products.setdefault(record['product'], {})
+                case = cases.setdefault(record['case']['id'], dict(suite=suite_of(record['case']), scores=[],
+                    dims={f: [] for f in FIELDS}, attempts=0, unfinished=0, unscored=0, undetermined=0))
                 case['attempts'] += 1
                 if not sample['coverage']['final_available']:
                     case['unfinished'] += 1
-                    continue
-                score, dims = sample_score(row['turns'])
-                missing = any(turn[field]['score'] is None and any(
-                    dimension_of(req) == DIMENSION[field] for req in active_requirements(sample, turn['number']))
-                    for turn in row['turns'] for field in FIELDS)
-                if score is None or missing:
+                turns, undetermined = scored_turns(sample, row)
+                score, dims = sample_score(turns) if turns is not None else (None, {})
+                if score is None:
                     case['unscored'] += 1
                     continue
+                case['undetermined'] += undetermined
                 case['scores'].append(score)
                 for field, value in dims.items(): case['dims'][field].append(value)
-            for (product, suite), cases in sorted(groups.items(), key=lambda item: (item[0][0], item[0][1] or '')):
+
+            def summarize(product, suite, cases):
                 scored = [c for c in cases.values() if c['scores']]
                 dims = {f: [mean(c['dims'][f]) for c in scored if c['dims'][f]] for f in FIELDS}
-                covered = all(c['scores'] or not c['unscored'] for c in cases.values())
+                covered = all(c['scores'] for c in cases.values())
                 total = mean([mean(c['scores']) for c in scored]) if covered else None
-                output.append(dict(export=name, slot=slot, reviewer=sheet['reviewer'], product=product, suite=suite,
+                return dict(export=name, slot=slot, reviewer=sheet['reviewer'], product=product, suite=suite,
                     total=None if total is None else total*20, samples=len(scored),
                     unfinished=sum(c['unfinished'] for c in cases.values()),
                     unscored=sum(c['unscored'] for c in cases.values()),
+                    undetermined=sum(c['undetermined'] for c in cases.values()),
                     repeats={case_id: dict(scored=len(c['scores']), attempts=c['attempts'])
                              for case_id, c in sorted(cases.items())},
-                    dimensions={f: dict(mean=mean(v), samples=len(v)) for f, v in dims.items()}))
+                    dimensions={f: dict(mean=mean(v), samples=len(v)) for f, v in dims.items()})
+
+            goals = combined20_goals()
+            for product, cases in sorted(products.items()):
+                suites = {}
+                for case_id, case in cases.items():
+                    suites.setdefault(case['suite'], {})[case_id] = case
+                for suite, members in sorted(suites.items(), key=lambda item: item[0] or ''):
+                    output.append(summarize(product, suite, members))
+                # Combined20 rows only when this export holds every Combined20 case for the product.
+                if all(case_id in cases for ids in goals.values() for case_id in ids):
+                    for goal, ids in goals.items():
+                        output.append(summarize(product, f'{COMBINED20}·{goal}', {i: cases[i] for i in ids}))
+                    output.append(summarize(product, COMBINED20, {i: cases[i] for ids in goals.values() for i in ids}))
     return output
 
 
+COMBINED20 = 'Combined20'
 TOTAL_DESCRIPTION = (
-    '各题组和评审独立汇总。同题先平均有效复测，再按题等权换算为百分制。适用维度有空分的作答记为缺评，'
-    '已完成作答的题若无有效评分，则暂不发布该题组总分。复测覆盖为有效评分次数 / 导出作答次数。'
+    '各题组和评审独立汇总。同题先平均有效复测，再按题等权换算为百分制。导出包含全部 20 道 Combined20 题时，'
+    '另给五个测试目标各一行（每行 4 题）和 Combined20 总行（20 题等权）。未完成作答照常计分，未提交轮次在其适用维度各计 1 分。'
+    '因 na 要求留空的维度不计入均值，单列为“不可判定”；适用维度无 na 却留空的作答记为缺评，某题若无有效评分，该行总分暂不发布。'
+    '复测覆盖为有效评分次数 / 导出作答次数。'
 )
-TOTAL_HEADERS = ('导出', '评审', '配置', '题组', '总分 / 100', '计分题数', '未完成', '缺评',
+TOTAL_HEADERS = ('导出', '评审', '配置', '题组', '总分 / 100', '计分题数', '未完成', '缺评', '不可判定',
                  '事实（题数）', '指令（题数）', '实用性（题数）', '复测覆盖')
 
 
@@ -536,13 +611,14 @@ def total_cells(item):
     dims = [f'{show(dim["mean"])}（{dim["samples"]}）' for dim in (item['dimensions'][f] for f in FIELDS)]
     repeats = '、'.join(f'{case} {v["scored"]}/{v["attempts"]}' for case, v in item['repeats'].items())
     return [item['export'], f'{item["slot"]} · {item["reviewer"]}', item['product'], item['suite'] or '—',
-            show(item['total']), str(item['samples']), str(item['unfinished']), str(item['unscored']), *dims, repeats]
+            show(item['total']), str(item['samples']), str(item['unfinished']), str(item['unscored']),
+            str(item['undetermined']), *dims, repeats]
 
 
 def totals_markdown(items):
     if not items: return ''
     lines = ['', '## 评审总分', '', TOTAL_DESCRIPTION, '', '| ' + ' | '.join(TOTAL_HEADERS) + ' |',
-             '|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|']
+             '|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|']
     lines.extend('| ' + ' | '.join(total_cells(item)) + ' |' for item in items)
     return '\n'.join(lines) + '\n'
 
