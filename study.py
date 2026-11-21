@@ -154,10 +154,17 @@ def link_entry(path):
     """Snapshot value for a symlink: its own target text, never the content it points to."""
     return 'symlink:'+os.readlink(path)
 
+BYTECODE_CACHE = '__pycache__'
+
 def snapshot(workspace):
-    """File hashes, every symlink as its own entry (never followed), and empty directories."""
+    """File hashes, every symlink as its own entry (never followed), and empty directories.
+
+    Real __pycache__ directories are skipped: running the provided tests without -B writes them,
+    and they are interpreter output rather than a change made to the workspace.
+    """
     result = {}
     for base, dirs, names in os.walk(workspace, followlinks=False):
+        dirs[:] = [d for d in dirs if not (d == BYTECODE_CACHE and not (Path(base)/d).is_symlink())]
         for name in dirs + names:
             p = Path(base)/name
             if p.is_symlink(): result[str(p.relative_to(workspace))] = link_entry(p)

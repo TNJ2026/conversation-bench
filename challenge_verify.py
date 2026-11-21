@@ -1,8 +1,9 @@
 """Check recorded challenge artifacts; with --regress, also run the hidden repair scenarios.
 
-Plain mode only reads records. --regress executes the submitted allocation.py on randomized
-scenarios from challenge_repair_hidden.py inside an OS sandbox, compares its raw results with
-the reference implementation outside the sandbox, and stores the outcome in the record so
+Plain mode only reads records. --regress executes the submitted repair on randomized scenarios
+inside an OS sandbox: allocation.py for Challenge3 (challenge_repair_hidden.py) and program.py
+for the three Extension10 repair cases (extension_repair_hidden.py). It compares the raw results
+with the reference implementation outside the sandbox and stores the outcome in the record so
 export can link it to the repair requirement.
 """
 import argparse
@@ -50,6 +51,9 @@ def scope(before, after, editable=(), created=()):
 
 def verify(record):
     case_id = record['case']['id']
+    if case_id in EXTENSION_REPAIR_CASES:
+        # Extension10 file checks are recorded by study.py; only the hidden regression is added here.
+        return []
     previous = initial = record['initial_files']
     results = []
     for n, turn in enumerate(record['turns'], 1):
@@ -94,6 +98,9 @@ def verify(record):
 HIDDEN = Path(__file__).with_name('challenge_repair_hidden.py')
 REPAIR_CASE = 'adv-repair-receipt-replay'
 REGRESSION_CHECK = '未公开回归测试（challenge_repair_hidden）'
+EXTENSION_HIDDEN = Path(__file__).with_name('extension_repair_hidden.py')
+EXTENSION_REPAIR_CASES = ('repair-stable-priority', 'repair-atomic-batch', 'repair-overnight-window')
+EXTENSION_REGRESSION_CHECK = '未公开回归测试（extension_repair_hidden）'
 SANDBOX_EXEC = Path('/usr/bin/sandbox-exec')
 # Runs inside the sandbox. It only executes the submission on the given inputs and reports raw
 # results; the parent compares them with the reference, so nothing printed here decides a verdict.
@@ -143,6 +150,78 @@ sys.stdout.flush()
 """
 
 
+# Runs inside the sandbox for the Extension10 repairs. Like BOOTSTRAP it only reports raw
+# results; mutation and return-shape checks are facts about the call, the verdict is the parent's.
+EXTENSION_BOOTSTRAP = """import copy, json, os, resource, sys
+resource.setrlimit(resource.RLIMIT_FSIZE, (262144, 262144))
+request = json.loads(sys.stdin.read())
+sys.path.insert(0, os.getcwd())
+print('READY-' + request['nonce'], flush=True)
+def bad(detail):
+    return dict(kind='bad', detail=detail)
+def rank(program, call):
+    rows = [dict(row) for row in call['rows']]
+    before, identities = copy.deepcopy(rows), [id(row) for row in rows]
+    try:
+        out = program.rank(rows)
+    except ValueError:
+        return dict(kind='error')
+    if [id(row) for row in rows] != identities or json.dumps(rows) != json.dumps(before):
+        return bad('input list or elements were modified')
+    if out is rows or not isinstance(out, list):
+        return bad('rank did not return a new list')
+    position = {id(row): i for i, row in enumerate(rows)}
+    if any(id(row) not in position for row in out):
+        return bad('returned elements are not the input elements')
+    return dict(kind='ok', order=[position[id(row)] for row in out])
+def updates(program, call):
+    current = dict(call['current'])
+    before = json.dumps(current, sort_keys=True)
+    try:
+        out = program.apply_updates(current, [tuple(item) for item in call['updates']])
+    except ValueError:
+        out = None
+    if json.dumps(current, sort_keys=True) != before:
+        return bad('current was modified')
+    if out is None:
+        return dict(kind='error')
+    if out is current or not isinstance(out, dict):
+        return bad('apply_updates did not return a new dict')
+    try:
+        return dict(kind='ok', value=json.loads(json.dumps(sorted([k, v] for k, v in out.items()))))
+    except (TypeError, ValueError):
+        return bad('result is not a plain mapping of names to numbers')
+def window(program, call):
+    values = []
+    for start, end, minute in call['triples']:
+        try:
+            value = program.inside(start, end, minute)
+        except ValueError:
+            return dict(kind='error')
+        if not isinstance(value, bool):
+            return bad('inside returned a non-bool')
+        values.append(value)
+    return dict(kind='ok', values=values)
+runner = {'repair-stable-priority': rank, 'repair-atomic-batch': updates, 'repair-overnight-window': window}[request['case']]
+results = []
+try:
+    import program
+except Exception as error:
+    results = [dict(kind='import_error', detail=type(error).__name__)]
+else:
+    for scenario in request['scenarios']:
+        outcome = []
+        for call in scenario['calls']:
+            try:
+                outcome.append(runner(program, call))
+            except Exception as error:
+                outcome.append(dict(kind='crash', detail=type(error).__name__))
+        results.append(outcome)
+sys.stdout.write('\\n' + request['nonce'] + json.dumps(results) + '\\n')
+sys.stdout.flush()
+"""
+
+
 def wire(calls):
     """JSON-safe form of scenario calls; tuple keys become [order, sku, value] rows."""
     return [dict(initial=[[*k, v] for k, v in initial.items()],
@@ -155,7 +234,7 @@ def reference_form(want):
             else dict(kind='error', detail='ValueError') for kind, balances in want]
 
 
-def sandbox_command(directory):
+def sandbox_command(directory, bootstrap=BOOTSTRAP):
     if sys.platform != 'darwin' or not SANDBOX_EXEC.is_file():
         return None
     python = Path(sys.executable).resolve()
@@ -175,38 +254,55 @@ def sandbox_command(directory):
         f'(allow process-exec (literal {json.dumps(str(python))})) '
         f'(allow file-read-data {literals} {subpaths})'
     )
-    return [str(SANDBOX_EXEC), '-p', profile, str(python), '-I', '-B', '-S', '-c', BOOTSTRAP]
+    return [str(SANDBOX_EXEC), '-p', profile, str(python), '-I', '-B', '-S', '-c', bootstrap]
+
+
+def repair_spec(case_id):
+    """How to run the hidden regression for a repair case, or None for other cases."""
+    if case_id == REPAIR_CASE:
+        import challenge_repair_hidden as hidden
+        return dict(artifact='allocation.py', check=REGRESSION_CHECK, hidden=HIDDEN, bootstrap=BOOTSTRAP,
+                    scenarios=hidden.scenarios, inputs=wire, request={}, strict=False,
+                    reference=lambda calls: reference_form(hidden.expected(calls)))
+    if case_id in EXTENSION_REPAIR_CASES:
+        import extension_repair_hidden as hidden
+        return dict(artifact='program.py', check=EXTENSION_REGRESSION_CHECK, hidden=EXTENSION_HIDDEN,
+                    bootstrap=EXTENSION_BOOTSTRAP, scenarios=lambda rng: hidden.scenarios(case_id, rng),
+                    inputs=lambda calls: calls, request=dict(case=case_id), strict=True,
+                    reference=lambda calls: hidden.expected(case_id, calls))
+    return None
 
 
 def regress(record, timeout=60, *, seed=None):
-    """Run randomized hidden scenarios against the turn-1 allocation.py; None when there is nothing to test.
+    """Run randomized hidden scenarios against the turn-1 repair; None when there is nothing to test.
 
     The submission only ever sees scenario inputs. Its raw results are compared with the
     reference implementation here, outside the sandbox, so printing success markers,
     exiting early or patching unittest inside the sandbox cannot produce a pass.
     """
-    import challenge_repair_hidden as hidden_module
     turns = record.get('turns') or []
-    if record['case']['id'] != REPAIR_CASE or not turns:
+    spec = repair_spec(record['case']['id'])
+    if spec is None or not turns:
         return None
-    source = turns[0].get('artifacts', {}).get('allocation.py')
-    hidden = HIDDEN.read_text(encoding='utf-8')
+    artifact = spec['artifact']
+    source = turns[0].get('artifacts', {}).get(artifact)
+    hidden = spec['hidden'].read_text(encoding='utf-8')
     base = dict(turn=1, hidden_sha256=hashlib.sha256(hidden.encode()).hexdigest())
     if source is None:
-        return dict(base, **{'pass': False}, summary='第1轮快照中没有 allocation.py')
+        return dict(base, **{'pass': False}, summary=f'第1轮快照中没有 {artifact}')
     seed = secrets.randbits(64) if seed is None else seed
-    cases = hidden_module.scenarios(random.Random(seed))
+    cases = spec['scenarios'](random.Random(seed))
     nonce = 'RESULT-' + secrets.token_hex(16) + ':'
-    inputs = [dict(name=name, calls=wire(calls)) for name, calls in cases]
+    inputs = [dict(name=name, calls=spec['inputs'](calls)) for name, calls in cases]
     base.update(seed=seed, inputs_sha256=hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest())
-    request = json.dumps(dict(nonce=nonce, scenarios=inputs))
+    request = json.dumps(dict(nonce=nonce, scenarios=inputs, **spec['request']))
     with tempfile.TemporaryDirectory(prefix='challenge-regress-') as temporary:
         directory = Path(temporary).resolve()
-        command = sandbox_command(directory)
+        command = sandbox_command(directory, spec['bootstrap'])
         if command is None:
             return dict(base, **{'pass': None}, summary='缺少受支持的评审沙箱（macOS sandbox-exec）')
         try:
-            (directory / 'allocation.py').write_text(source, encoding='utf-8')
+            (directory / artifact).write_text(source, encoding='utf-8')
             with tempfile.TemporaryFile() as stdin, tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
                 stdin.write(request.encode()); stdin.seek(0)
                 try:
@@ -233,10 +329,14 @@ def regress(record, timeout=60, *, seed=None):
     if not isinstance(results, list):
         return dict(base, **{'pass': False}, summary='沙箱内没有返回可解析的运行结果（被测代码崩溃、提前退出或截断了输出）')
     if len(results) == 1 and isinstance(results[0], dict) and results[0].get('kind') == 'import_error':
-        return dict(base, **{'pass': False}, summary=f'导入 allocation.py 失败：{results[0].get("detail")}')
+        return dict(base, **{'pass': False}, summary=f'导入 {artifact} 失败：{results[0].get("detail")}')
     failed = []
     for (name, calls), got in zip(cases, results + [None] * (len(cases) - len(results))):
-        if got != reference_form(hidden_module.expected(calls)):
+        want = spec['reference'](calls)
+        # Extension10 compares JSON text so True and 1, or 5 and 5.0, are not treated as equal;
+        # Challenge3 keeps its original value comparison.
+        same = (json.dumps(got, sort_keys=True) == json.dumps(want, sort_keys=True)) if spec['strict'] else got == want
+        if not same:
             failed.append(name)
     total = len(cases)
     summary = (f'{total - len(failed)}/{total} 个场景与参考实现一致' +
@@ -248,7 +348,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--study', required=True, type=Path)
     parser.add_argument('--regress', action='store_true',
-                        help='执行被测 allocation.py 与未公开回归测试，并把结果写回记录（会运行被测代码）')
+                        help='执行被测 allocation.py 或 program.py 与未公开回归测试，并把结果写回记录（会运行被测代码）')
     parser.add_argument('--seed', type=int, help='复跑指定的回归输入；省略时为本批次随机生成一个种子')
     args = parser.parse_args()
     if args.seed is not None and not args.regress:
@@ -257,9 +357,9 @@ def main():
     records = []
     for path in sorted((args.study / 'records').glob('J*.json')):
         record = json.loads(path.read_text(encoding='utf-8'))
-        if record['case'].get('suite') != 'v3-challenge3':
+        if record['case'].get('suite') != 'v3-challenge3' and record['case']['id'] not in EXTENSION_REPAIR_CASES:
             continue
-        if args.regress and record['case']['id'] == REPAIR_CASE and record.get('status') == 'completed':
+        if args.regress and repair_spec(record['case']['id']) and record.get('status') == 'completed':
             outcome = regress(record, seed=seed)
             if outcome is not None and outcome['pass'] is None:
                 print(f'{record["job"]}: 回归未执行，结果记为待定（{outcome["summary"]}）；R2 不受约束，需人工判断',
@@ -271,7 +371,7 @@ def main():
         records.append({'job': record['job'], 'case': record['case']['id'], 'checks': verify(record),
                         'hidden_regression': record.get('hidden_regression')})
     if not records:
-        parser.error('study has no Challenge3 records')
+        parser.error('study has no Challenge3 or Extension10 repair records')
     print(json.dumps(records, ensure_ascii=False, indent=2))
 
 

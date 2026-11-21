@@ -12,6 +12,16 @@
 
 新增题使用 V3 的逐轮事实准确性、指令遵守、实用性评分。有确定判据的格式、文件权限和交付物要求已连接相应的自动检查。三道工程修复题随包提供可复现缺陷的冻结测试，评审可核对源代码、工作区快照和运行证据。
 
+三道新增修复题的 R2 另由评审侧的未公开回归判定（`extension_repair_hidden.py`，不随材料分发）。导出前与 Challenge3 一同运行：
+
+```sh
+python3 challenge_verify.py --study studies/combined20 --regress
+```
+
+它在 macOS `sandbox-exec` 中运行第 1 轮快照里的 `program.py`，输入每批随机生成，结果在沙箱外与参考实现比对，并写回记录，导出时显示为“未公开回归测试（extension_repair_hidden）”。场景覆盖同优先级 ID 与到达顺序相反、元素字段被改、同键后续合法值掩盖非法项、bool 与浮点值、跨午夜和同点窗口的边界及随机窗口。沙箱不可用时结果记为待定，R2 需人工读代码判定。
+
+工作区快照不计入 `__pycache__` 目录，未加 `-B` 运行测试产生的字节码缓存不算文件改动。
+
 ```sh
 python3 study.py list
 python3 study.py create --suite v3-combined20 --output studies/combined20/plan.json
