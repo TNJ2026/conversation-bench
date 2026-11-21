@@ -170,20 +170,21 @@ def rank(program, call):
         return bad('input list or elements were modified')
     if out is rows or not isinstance(out, list):
         return bad('rank did not return a new list')
-    position = {id(row): i for i, row in enumerate(rows)}
-    if any(id(row) not in position for row in out):
-        return bad('returned elements are not the input elements')
-    return dict(kind='ok', order=[position[id(row)] for row in out])
+    try:
+        return dict(kind='ok', rows=json.loads(json.dumps(out)))
+    except (TypeError, ValueError):
+        return bad('rank returned non-JSON row values')
 def updates(program, call):
     current = dict(call['current'])
     before = json.dumps(current, sort_keys=True)
+    invalid_batch = object()
     try:
         out = program.apply_updates(current, [tuple(item) for item in call['updates']])
     except ValueError:
-        out = None
+        out = invalid_batch
     if json.dumps(current, sort_keys=True) != before:
         return bad('current was modified')
-    if out is None:
+    if out is invalid_batch:
         return dict(kind='error')
     if out is current or not isinstance(out, dict):
         return bad('apply_updates did not return a new dict')
@@ -273,6 +274,11 @@ def repair_spec(case_id):
     return None
 
 
+def evaluator_digest(spec):
+    """Identify the reference cases and the code that observes submitted results."""
+    return hashlib.sha256(spec['hidden'].read_bytes() + b'\0' + spec['bootstrap'].encode()).hexdigest()
+
+
 def regress(record, timeout=60, *, seed=None):
     """Run randomized hidden scenarios against the turn-1 repair; None when there is nothing to test.
 
@@ -287,7 +293,8 @@ def regress(record, timeout=60, *, seed=None):
     artifact = spec['artifact']
     source = turns[0].get('artifacts', {}).get(artifact)
     hidden = spec['hidden'].read_text(encoding='utf-8')
-    base = dict(turn=1, hidden_sha256=hashlib.sha256(hidden.encode()).hexdigest())
+    base = dict(turn=1, hidden_sha256=hashlib.sha256(hidden.encode()).hexdigest(),
+                evaluator_sha256=evaluator_digest(spec))
     if source is None:
         return dict(base, **{'pass': False}, summary=f'第1轮快照中没有 {artifact}')
     seed = secrets.randbits(64) if seed is None else seed

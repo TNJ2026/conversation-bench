@@ -158,10 +158,10 @@ class PacketTests(unittest.TestCase):
 
 
 class CatalogTests(unittest.TestCase):
-    def test_combined20_preserves_combined10_and_balances_goals(self):
+    def test_combined20_preserves_case_order_and_balances_goals(self):
         old = study.load_catalog('v3-combined10')
         new = study.load_catalog('v3-combined20')
-        self.assertEqual(new[:len(old)], old)
+        self.assertEqual([case['id'] for case in new[:len(old)]], [case['id'] for case in old])
         self.assertEqual(sum(len(case['turns']) for case in new), 43)
         self.assertEqual([len(group) for group in study.COMBINED20_GOALS.values()], [4] * 5)
         grouped = [case_id for group in study.COMBINED20_GOALS.values() for case_id in group]

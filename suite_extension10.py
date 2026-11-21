@@ -6,9 +6,10 @@ from challenge_verify import EXTENSION_REGRESSION_CHECK
 from suite_common import case, turn
 
 SUITE = 'v3-extension10'
-# 09:30 written with half- or full-width digits and colon, without the leading zero, or as 九点半.
+# Recognize common numeric and Chinese spellings; other wording is left to the reviewer.
 REVIEW_TIME = (r'(?<![0-9０-９])[0０]?[9９]\s*[:：]\s*[3３][0０](?![0-9０-９])'
-               r'|九\s*[点點时時]\s*(?:半|三十)')
+               r'|(?<![0-9０-９])(?:[0０]?[9９]|九)\s*[点點时時]\s*'
+               r'(?:半|(?:三十|[3３][0０](?![0-9０-９]))\s*分?)')
 F, I, U = 'factuality', 'instruction', 'usefulness'
 C, M = 'critical', 'minor'
 NO_CHANGE = '本轮未改变文件'
@@ -281,7 +282,7 @@ def formats():
                  '保持首行意思、两个行首、两句两行和其他输出要求不变。',
                  [{'kind': 'sentences', 'count': 2},
                   {'kind': 'matches', 'label': '给出指定复核时间', 'pattern': REVIEW_TIME,
-                   'accepts': '09:30、9:30、09：30、九点半等等价写法'}]),
+                   'accepts': '09:30、9点30分、九点半等等价写法', 'on_miss': None}]),
         ], [
             (F, C, [1, 2], '第一行准确表达已经完成清点'),
             (F, C, [1], '第二行准确说明等待复核'),
@@ -291,7 +292,7 @@ def formats():
             (U, M, [1, 2], '简报可直接作为值班交接使用'),
         ], ('内容和约束都齐全，可直接转发。', '主要信息齐全但需修复格式或时间表达。',
             '无法直接交接，或给出错误状态和时间。'),
-        ['清点已完成。首轮等待复核，次轮复核定于明天 09:30。撤销仅作用于字数上限。'], revision=2,
+        ['清点已完成。首轮等待复核，次轮复核定于明天 09:30。撤销仅作用于字数上限。'], revision=3,
         auto={2: [[2, '给出指定复核时间']], 3: [[None, '句数']], 4: [[1, '非空白字符上限']]}),
     ]
 

@@ -46,7 +46,7 @@ def reference_inside(start, end, minute):
 def expected(case_id, calls):
     """Reference result per call, in the same JSON form the sandbox returns."""
     if case_id == STABLE:
-        return [dict(kind='ok', order=reference_rank(call['rows'])) for call in calls]
+        return [dict(kind='ok', rows=[call['rows'][i] for i in reference_rank(call['rows'])]) for call in calls]
     if case_id == ATOMIC:
         return [reference_apply(dict(call['current']), [tuple(u) for u in call['updates']]) for call in calls]
     if case_id == WINDOW:
@@ -140,9 +140,7 @@ if __name__ == '__main__':
         for call, want in zip(calls, expected(case_id, calls)):
             try:
                 if case_id == STABLE:
-                    rows = call['rows']
-                    out = program.rank(rows)
-                    got = dict(kind='ok', order=[next(i for i, r in enumerate(rows) if r is x) for x in out])
+                    got = dict(kind='ok', rows=program.rank(call['rows']))
                 elif case_id == ATOMIC:
                     out = program.apply_updates(dict(call['current']), [tuple(u) for u in call['updates']])
                     got = dict(kind='ok', value=sorted([k, v] for k, v in out.items()))
@@ -150,6 +148,7 @@ if __name__ == '__main__':
                     got = dict(kind='ok', values=[program.inside(*t) for t in call['triples']])
             except ValueError:
                 got = dict(kind='error')
-            failures += json.dumps(got) != json.dumps(want)
-            print('ok  ' if json.dumps(got) == json.dumps(want) else 'FAIL', name)
+            matched = json.dumps(got, sort_keys=True) == json.dumps(want, sort_keys=True)
+            failures += not matched
+            print('ok  ' if matched else 'FAIL', name)
     raise SystemExit(1 if failures else 0)

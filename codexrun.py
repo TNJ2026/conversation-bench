@@ -213,7 +213,7 @@ def snapshot(workspace, text_files=(), source=False):
             p = Path(base)/name; relative = str(p.relative_to(workspace))
             if p.is_symlink():
                 files[relative] = study.link_entry(p); continue
-            if not p.is_file(): continue
+            if not p.is_file() or study.is_python_bytecode_cache(p): continue
             if len(files)>=200 or p.stat().st_size>2_000_000:
                 limits.append(relative+': snapshot limit'); continue
             data = p.read_bytes(); files[relative]=hashlib.sha256(data).hexdigest()

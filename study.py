@@ -4,6 +4,7 @@ import argparse
 import datetime as dt
 import hashlib
 import html
+from importlib.util import source_from_cache
 import json
 import os
 from pathlib import Path
@@ -18,8 +19,8 @@ WORKSPACES = ROOT.parent/'conversation-bench-workspaces'
 DEFAULT_SUITE = 'v3-combined20'
 COMPONENT_SUITES = ('v3-advanced5', 'v3-challenge3', 'v3-guard4')
 COMBINED10_EXCLUDED = ('adv-room-reassignment', 'adv-shipment-update')
-# Combined suites: (component suites, case IDs left out). Components stay frozen; a new
-# combination is a new suite name, so earlier plans keep resolving to the same cases.
+# Combined suites: (component suites, case IDs left out). The legacy components stay frozen.
+# Revisions to inherited cases are applied only when loading Combined20.
 COMBINED_SUITES = {
     'v3-combined8': (('v3-advanced5', 'v3-challenge3'), ()),
     # Drops the room case (same update-then-revoke pattern as the shipment case) and adds Guard4.
@@ -115,6 +116,16 @@ def load_catalog(suite, root=None):
     if len(ids) != len(cases):
         raise ValueError('合并题组包含重复的案例 ID')
     if suite == 'v3-combined20':
+        revisions = load(root/'cases-v3-combined20-revisions.json')
+        if set(revisions) - ids:
+            raise ValueError('Combined20 题目修订包含未知的案例 ID')
+        for case in cases:
+            revision = revisions.get(case['id'])
+            if revision is None:
+                continue
+            if 'id' in revision or revision['revision'] <= case['revision']:
+                raise ValueError('Combined20 题目修订须保留 ID 并提高修订号')
+            case.update(revision)
         grouped = [case_id for group in COMBINED20_GOALS.values() for case_id in group]
         if len(COMBINED20_GOALS) != 5 or any(len(group) != 4 for group in COMBINED20_GOALS.values()):
             raise ValueError('Combined20 必须包含 5 个测试目标，每个目标 4 题')
@@ -154,23 +165,34 @@ def link_entry(path):
     """Snapshot value for a symlink: its own target text, never the content it points to."""
     return 'symlink:'+os.readlink(path)
 
-BYTECODE_CACHE = '__pycache__'
+def is_python_bytecode_cache(path):
+    """Recognize a compiled-file name and header backed by a local Python source."""
+    if path.parent.name != '__pycache__' or path.suffix != '.pyc' or path.is_symlink():
+        return False
+    try:
+        source = Path(source_from_cache(str(path)))
+    except ValueError:
+        return False
+    if not source.is_file() or source.is_symlink():
+        return False
+    with path.open('rb') as file:
+        header = file.read(16)
+    # Python 3.9+ caches use the PEP 552 header. Accept caches from the Python
+    # running the workload even when its magic number differs from the runner's.
+    return (len(header) == 16 and header[2:4] == b'\r\n'
+            and int.from_bytes(header[4:8], 'little') in (0, 1, 3))
 
 def snapshot(workspace):
-    """File hashes, every symlink as its own entry (never followed), and empty directories.
-
-    Real __pycache__ directories are skipped: running the provided tests without -B writes them,
-    and they are interpreter output rather than a change made to the workspace.
-    """
+    """Hash workspace files except Python bytecode caches, retaining links and empty dirs."""
     result = {}
     for base, dirs, names in os.walk(workspace, followlinks=False):
-        dirs[:] = [d for d in dirs if not (d == BYTECODE_CACHE and not (Path(base)/d).is_symlink())]
         for name in dirs + names:
             p = Path(base)/name
             if p.is_symlink(): result[str(p.relative_to(workspace))] = link_entry(p)
             elif p.is_dir():
                 if not any(p.iterdir()): result[dir_entry(p, workspace)] = EMPTY_DIR
-            elif p.is_file(): result[str(p.relative_to(workspace))] = hashlib.sha256(p.read_bytes()).hexdigest()
+            elif p.is_file() and not is_python_bytecode_cache(p):
+                result[str(p.relative_to(workspace))] = hashlib.sha256(p.read_bytes()).hexdigest()
     return result
 
 def read_artifact(path):

@@ -54,6 +54,11 @@ def recorded_verifications(record):
     if spec is None:
         return rows
     hidden = record.get('hidden_regression')
+    if (hidden and record['case']['id'] in challenge_verify.EXTENSION_REPAIR_CASES
+            and hidden.get('evaluator_sha256') != challenge_verify.evaluator_digest(spec)):
+        rows.setdefault(hidden['turn'], []).append(dict(check=spec['check'], **{'pass': None},
+            detail='已有结果来自旧版验证器；重新运行 challenge_verify.py --study … --regress 后再导出'))
+        return rows
     if hidden:
         rows.setdefault(hidden['turn'], []).append(dict(check=spec['check'], **{'pass': hidden['pass']},
             detail=hidden['summary'] + f'；测试文件SHA256 {hidden["hidden_sha256"][:12]}；由 challenge_verify.py --regress 在评审侧执行'))

@@ -224,9 +224,12 @@ def check(text, rules, earlier):
             results.append({'check': rule.get('label', '回答与指定值一致'), 'pass': passed, 'detail': detail})
         elif kind == 'matches':
             found = re.search(rule['pattern'], normalize(text)) is not None
-            results.append({'check': rule['label'], 'pass': found,
-                            'detail': ('匹配到' if found else '未匹配到') + '指定写法之一（' + rule.get('accepts', rule['pattern']) +
-                                      '）；只核对出现，不验证语义归属'})
+            passed = True if found else rule.get('on_miss', False)
+            detail = (('匹配到' if found else '未匹配到') + '指定写法之一（' +
+                      rule.get('accepts', rule['pattern']) + '）；只核对出现，不验证语义归属')
+            if passed is None:
+                detail += '；可能存在其他等价写法，需人工核对'
+            results.append({'check': rule['label'], 'pass': passed, 'detail': detail})
         elif kind == 'json':
             passed = False
             try:

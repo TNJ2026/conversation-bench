@@ -1,6 +1,6 @@
 # Combined20 题库
 
-`v3-combined20` 共 20 题、43 轮。前 10 题沿用 Combined10 的原题、顺序和评分要求，新增 10 题均为两轮。
+`v3-combined20` 共 20 题、43 轮。前 10 题沿用 Combined10 的题目 ID 和顺序，其中 6 题载入 Combined20 专用的提示或自动检查修订。旧套件名对应原始题目版本，新增 10 题均为两轮。[Combined20 专用修订](../cases-v3-combined20-revisions.json)
 
 | 测试目标 | 沿用题目 | 新增题目 | 合计 |
 |---|---|---|---:|
@@ -20,7 +20,9 @@ python3 challenge_verify.py --study studies/combined20 --regress
 
 它在 macOS `sandbox-exec` 中运行第 1 轮快照里的 `program.py`，输入每批随机生成，结果在沙箱外与参考实现比对，并写回记录，导出时显示为“未公开回归测试（extension_repair_hidden）”。场景覆盖同优先级 ID 与到达顺序相反、元素字段被改、同键后续合法值掩盖非法项、bool 与浮点值、跨午夜和同点窗口的边界及随机窗口。沙箱不可用时结果记为待定，R2 需人工读代码判定。
 
-工作区快照不计入 `__pycache__` 目录，未加 `-B` 运行测试产生的字节码缓存不算文件改动。
+修复题的隐藏验证器更新后，旧验证结果在新导出中标为待核对，可重新运行上面的命令获取当前结果。
+
+桌面和 CLI 的工作区快照会跳过可识别且有对应源文件的 Python 字节码缓存。普通文件和符号链接仍纳入快照，包括 `__pycache__` 内的条目。
 
 ```sh
 python3 study.py list
