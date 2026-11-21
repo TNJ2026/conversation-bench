@@ -437,9 +437,10 @@ class FileCaseTests(unittest.TestCase):
                 orders.add(tuple(p.name for p in written))
                 self.assertEqual(len({p.stat().st_mtime_ns for p in w.iterdir()}), 1)
                 # The final ctime order, which an agent can list with ls -c, must follow the shuffled order.
-                by_ctime=[p.name for p in sorted(w.iterdir(),key=lambda p:p.stat().st_ctime_ns)]
-                self.assertEqual(by_ctime,[p.name for p in written])
-                newest.add(by_ctime[-1])
+                # Filesystems with coarse timestamps give equal ctimes, which carry no order cue either.
+                ctimes=[p.stat().st_ctime_ns for p in written]
+                self.assertEqual(ctimes,sorted(ctimes))
+                newest.add(written[-1].name)
             self.assertGreater(len(orders), 1)
             self.assertEqual(newest, set(timed['fixtures']))
             plain=read_only_case(); written=[]

@@ -39,22 +39,26 @@ def save(path, value):
 
 
 def recorded_verifications(record):
-    """{turn number: [check rows]} from challenge_verify for Challenge3 records; empty for other cases."""
+    """{turn number: [check rows]} from challenge_verify for Challenge3 records and the hidden
+    regression of the Extension10 repair cases; empty for other cases."""
     try:
         import challenge_verify
         results = challenge_verify.verify(record)
+        spec = challenge_verify.repair_spec(record['case']['id'])
     except (ImportError, ValueError, KeyError, TypeError):
         return {}
     labels = challenge_verify.CHECK_LABELS
     rows = {item['turn']: [dict(check=labels.get(key, key), detail='评审侧结构化校验，只读记录、不执行被测代码；语义仍需人工判断',
                                 **{'pass': value}) for key, value in item['checks'].items()]
             for item in results}
+    if spec is None:
+        return rows
     hidden = record.get('hidden_regression')
     if hidden:
-        rows.setdefault(hidden['turn'], []).append(dict(check=challenge_verify.REGRESSION_CHECK, **{'pass': hidden['pass']},
+        rows.setdefault(hidden['turn'], []).append(dict(check=spec['check'], **{'pass': hidden['pass']},
             detail=hidden['summary'] + f'；测试文件SHA256 {hidden["hidden_sha256"][:12]}；由 challenge_verify.py --regress 在评审侧执行'))
-    elif record['case']['id'] == challenge_verify.REPAIR_CASE and record.get('turns'):
-        rows.setdefault(1, []).append(dict(check=challenge_verify.REGRESSION_CHECK, **{'pass': None},
+    elif record.get('turns'):
+        rows.setdefault(1, []).append(dict(check=spec['check'], **{'pass': None},
             detail='尚未运行；导出前执行 challenge_verify.py --study … --regress'))
     return rows
 

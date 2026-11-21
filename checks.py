@@ -8,7 +8,7 @@ from html.parser import HTMLParser
 
 PRODUCTS = ('dsh', 'chatgpt', 'hermes')
 KINDS = ('contains', 'dates', 'length', 'paragraphs', 'paragraph', 'no_heading', 'preserve',
-         'exact', 'json', 'excludes', 'sentences', 'final_amount', 'no_money')
+         'exact', 'json', 'excludes', 'sentences', 'final_amount', 'no_money', 'matches')
 
 FULL_DATE = re.compile(r'(?<!\d)(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})(?!\d)')
 MONTH_DAY = re.compile(r'(?<!\d)(\d{1,2})\s*月\s*(\d{1,2})(?!\d)')
@@ -212,8 +212,21 @@ def check(text, rules, earlier):
                 excerpt = parts[index]
                 results.append({'check': '保留指定段落', 'pass': excerpt in normalize(text), 'detail': '按空行识别，人工确认选段是否正确。原段：' + excerpt})
         elif kind == 'exact':
-            results.append({'check': rule.get('label', '回答与指定值一致'), 'pass': text.strip() == rule['value'],
-                            'detail': '去掉首尾空白后整条回复须等于 ' + repr(rule['value']) + '；附加任何说明都判不一致'})
+            # Line endings are transport detail (CRLF from some runners), not part of the answer.
+            reply = normalize(text).strip()
+            if rule.get('pattern'):
+                passed = re.fullmatch(rule['pattern'], reply) is not None
+                detail = ('去掉首尾空白后整条回复须完整匹配 ' + repr(rule['pattern']) +
+                          '（只放宽分隔符的等价写法，标准值 ' + repr(rule['value']) + '）；附加任何说明都判不一致')
+            else:
+                passed = reply == rule['value']
+                detail = '去掉首尾空白、统一换行符后整条回复须等于 ' + repr(rule['value']) + '；附加任何说明都判不一致'
+            results.append({'check': rule.get('label', '回答与指定值一致'), 'pass': passed, 'detail': detail})
+        elif kind == 'matches':
+            found = re.search(rule['pattern'], normalize(text)) is not None
+            results.append({'check': rule['label'], 'pass': found,
+                            'detail': ('匹配到' if found else '未匹配到') + '指定写法之一（' + rule.get('accepts', rule['pattern']) +
+                                      '）；只核对出现，不验证语义归属'})
         elif kind == 'json':
             passed = False
             try:

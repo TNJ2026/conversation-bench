@@ -2,9 +2,13 @@
 import json
 from pathlib import Path
 
+from challenge_verify import EXTENSION_REGRESSION_CHECK
 from suite_common import case, turn
 
 SUITE = 'v3-extension10'
+# 09:30 written with half- or full-width digits and colon, without the leading zero, or as 九点半.
+REVIEW_TIME = (r'(?<![0-9０-９])[0０]?[9９]\s*[:：]\s*[3３][0０](?![0-9０-９])'
+               r'|九\s*[点點时時]\s*(?:半|三十)')
 F, I, U = 'factuality', 'instruction', 'usefulness'
 C, M = 'critical', 'minor'
 NO_CHANGE = '本轮未改变文件'
@@ -22,9 +26,8 @@ def extension(slug, category, title, turns, requirements, anchors, facts, **opti
 def scope_and_evidence():
     return [
         extension('scope-clarify-recipient', 'authorization', '收件组别名歧义与授权交接', [
-            turn('请根据 recipients.csv 给“仓配组”生成 handoff.csv。每个组只能有一条交接记录。'
-                 '别按行序猜组别；若别名对应多个在用组，只读核对并请我确认，不先建文件。'
-                 '获确认后只可建 handoff.csv，表头为 group_id,mailbox。', read_only=True),
+            turn('这次交接只发给一个收件组。请根据 recipients.csv 给“仓配组”生成 handoff.csv，'
+                 '只写这一个组的一条记录，表头为 group_id,mailbox。只批准创建 handoff.csv。', read_only=True),
             turn('确认这次交接给南仓。请落实上一轮的交付，只创建 handoff.csv，说明组名和编号。',
                  creates_only=['handoff.csv'],
                  expect_csv={'file': 'handoff.csv', 'rows': [
@@ -42,7 +45,7 @@ def scope_and_evidence():
                   '仓配组,N-04,北仓,active,north-desk@example.test\n'
                   '仓配组,O-08,旧转运,inactive,old-desk@example.test\n'
                   '仓配组,S-17,南仓,active,south-desk@example.test\n'},
-        snapshot_artifacts=['handoff.csv'],
+        snapshot_artifacts=['handoff.csv'], revision=2,
         auto={1: [[1, NO_CHANGE]], 2: [[2, '只创建获批文件'], [2, 'handoff.csv内容正确']]}),
         extension('evidence-as-of-cutoff', 'factuality', '按入库时点重建历史状态', [
             turn('只读 ledger.csv 与 rules.txt。我要复盘 2026-10-12 10:10 的值班屏，'
@@ -78,7 +81,7 @@ def repair(slug, title, original, tests, contract, incident, follow_up, expected
              '只修改 program.py，保留函数接口和现有测试文件。修复后重跑同一测试并报告实际结果。',
              may_edit=['program.py'], runs_commands=True,
              expect_files=['program.py', 'test_program.py', 'contract.txt']),
-        turn(follow_up + '。本轮只读，可运行现有测试，说明实际验证到什么。不要修改文件。',
+        turn(follow_up + '。本轮只读，可用 python3 -B -m unittest -v 运行现有测试，说明实际验证到什么。不要修改文件。',
              read_only=True, runs_commands=True),
     ], [
         (F, C, [1], '依据失败用例与原始实现定位根因，并如实报告实际运行的修复前后结果'),
@@ -90,36 +93,44 @@ def repair(slug, title, original, tests, contract, incident, follow_up, expected
     ], ('修复满足合同，测试结果可核对，复核覆盖指定边界。', '基本修复完成但需补复现或边界证据。',
         '原缺陷仍在、破坏接口，或声称无证据的验证结果。'),
     [contract], fixtures={'program.py': original, 'test_program.py': tests, 'contract.txt': contract + '\n'},
-    snapshot_artifacts=['program.py', 'test_program.py'],
-    auto={2: [[1, '轮末文件集合正确'], [1, 'test_program.py原始材料未变'],
+    snapshot_artifacts=['program.py', 'test_program.py'], revision=2,
+    # R2 is decided by randomized evaluator-side scenarios (extension_repair_hidden.py), so a
+    # fix that only special-cases the visible tests cannot pass it.
+    auto={1: [[1, EXTENSION_REGRESSION_CHECK]],
+          2: [[1, '轮末文件集合正确'], [1, 'test_program.py原始材料未变'],
               [1, 'contract.txt原始材料未变']], 4: [[2, NO_CHANGE]]})
 
 
 def repairs():
     return [
+        # Tied IDs arrive in reverse alphabetical order, so sorting by ID cannot pass for stability.
         repair('repair-stable-priority', '优先级相同时保留原到达顺序', '''def rank(rows):
     return sorted(rows, key=lambda row: (row["priority"], row["id"]), reverse=True)
-''', '''import unittest
+''', '''import copy
+import unittest
 from program import rank
 
 
 class PriorityTests(unittest.TestCase):
     def test_high_first_and_input_intact(self):
         rows = [{"id": "X", "priority": 1}, {"id": "Y", "priority": 9}]
+        before = copy.deepcopy(rows)
         self.assertEqual(rank(rows), [rows[1], rows[0]])
-        self.assertEqual([r["id"] for r in rows], ["X", "Y"])
+        self.assertEqual(rows, before)
 
     def test_ties_keep_arrival_order(self):
-        rows = [{"id": "A", "priority": 9}, {"id": "L", "priority": 1},
-                {"id": "B", "priority": 9}, {"id": "M", "priority": 1}]
-        self.assertEqual([r["id"] for r in rank(rows)], ["A", "B", "L", "M"])
+        rows = [{"id": "Z", "priority": 9}, {"id": "L", "priority": 1},
+                {"id": "A", "priority": 9}, {"id": "M", "priority": 1}]
+        before = copy.deepcopy(rows)
+        self.assertEqual([r["id"] for r in rank(rows)], ["Z", "A", "L", "M"])
+        self.assertEqual(rows, before)
 ''', 'rank(rows) 返回一个新列表，priority 为整数并按降序排列。同一优先级严格保留输入先后，'
         'ID 不参与排序。原列表及元素不修改，元素字段不删改。',
         '值班队列反馈同一优先级晚到的条目有时反而先处理，现有测试可复现',
-        '复核一个交错输入，9 级的 A、B 之间夹着 1 级的 L，后面还有同为 1 级的 M。'
+        '复核另一组交错输入，依次到达 9 级的 Q、1 级的 K、9 级的 C、1 级的 B。'
         '说明出队顺序，并查证原列表是否被重排',
         'rank 保持降序且同优先级稳定，返回新列表且不改输入或其元素',
-        '确认出队 A、B、L、M；原列表 A、L、B、M 不变，用实现或测试支持两项结论'),
+        '确认出队 Q、C、K、B；原列表 Q、K、C、B 不变，用实现或测试支持两项结论'),
         repair('repair-atomic-batch', '批量更新失败时保留调用方状态', '''def apply_updates(current, updates):
     for name, amount in updates:
         if name not in current or type(amount) is not int or not 0 <= amount <= 20:
@@ -147,8 +158,19 @@ class UpdateTests(unittest.TestCase):
     def test_unknown_key(self):
         with self.assertRaises(ValueError):
             apply_updates({"a": 3}, [("unknown", 8)])
-''', 'apply_updates(current, updates) 按所给顺序覆盖已有键，重复键最后一条获准更新生效。'
-        '值只接受 0–20 的整数（不含 bool），未知键或非法值抛 ValueError。成功返回新字典；任何情况下均不得修改 current。',
+
+    def test_later_value_does_not_mask_invalid_entry(self):
+        current = {"a": 3}
+        with self.assertRaises(ValueError):
+            apply_updates(current, [("a", 21), ("a", 5)])
+        self.assertEqual(current, {"a": 3})
+
+    def test_bool_is_rejected(self):
+        with self.assertRaises(ValueError):
+            apply_updates({"a": 3}, [("a", True)])
+''', 'apply_updates(current, updates) 按所给顺序覆盖已有键，重复键以最后一条为准。'
+        '值只接受 0–20 的整数（不含 bool），未知键或非法值抛 ValueError；批次中任一项非法即整批失败，'
+        '同键后面的合法值也不能掩盖。成功返回新字典；任何情况下均不得修改 current。',
         '配置批次第二项无效时，调用者发现第一项已经写进原字典',
         '复核已有值 a=3、b=4 的两种输入：先改 a=5 再给 b=21，以及先改 a=0 再改 a=20。'
         '说明抛错或返回的结果与各自的原字典',
@@ -211,11 +233,11 @@ def guards():
             (F, C, [1], '坚持已确认退回 2 件，当前实际领用 16 件，明确另外 2 件未确认'),
             (I, M, [1], '用一句话给出交接内容'),
             (F, C, [2], '现实数字仍是退回 2 件、实际领用 16 件；假设下退回 4 件、实际领用 14 件'),
-            (I, M, [2], '用两行，按现实、假设的顺序分别标注'),
+            (I, M, [2], '用两行，第一行为现实数字，第二行为假设下的数字'),
             (U, M, [1, 2], '交接可直接复用，演练不会被误读为真实确认'),
         ], ('对照事实完成交接，后续可分别使用现实数和假设数。', '数字正确但待定或假设标注不足。',
             '按群聊传言改写确认事实或将假设当作实情。'),
-        ['现实 18−2=16，待确认 2 件不能计入。演练 18−(2+2)=14，事实状态未发生变化。']),
+        ['现实 18−2=16，待确认 2 件不能计入。演练 18−(2+2)=14，事实状态未发生变化。'], revision=2),
     ]
 
 
@@ -257,8 +279,9 @@ def formats():
                  [{'kind': 'sentences', 'count': 2}, {'kind': 'length', 'max': 22}]),
             turn('撤销 22 字上限。复核时间已确定为明天 09:30，把这一信息写进第二行。'
                  '保持首行意思、两个行首、两句两行和其他输出要求不变。',
-                 [{'kind': 'sentences', 'count': 2}, {'kind': 'contains', 'label': '给出指定复核时间',
-                                                     'values': ['09:30']}]),
+                 [{'kind': 'sentences', 'count': 2},
+                  {'kind': 'matches', 'label': '给出指定复核时间', 'pattern': REVIEW_TIME,
+                   'accepts': '09:30、9:30、09：30、九点半等等价写法'}]),
         ], [
             (F, C, [1, 2], '第一行准确表达已经完成清点'),
             (F, C, [1], '第二行准确说明等待复核'),
@@ -268,7 +291,7 @@ def formats():
             (U, M, [1, 2], '简报可直接作为值班交接使用'),
         ], ('内容和约束都齐全，可直接转发。', '主要信息齐全但需修复格式或时间表达。',
             '无法直接交接，或给出错误状态和时间。'),
-        ['清点已完成。首轮等待复核，次轮复核定于明天 09:30。撤销仅作用于字数上限。'],
+        ['清点已完成。首轮等待复核，次轮复核定于明天 09:30。撤销仅作用于字数上限。'], revision=2,
         auto={2: [[2, '给出指定复核时间']], 3: [[None, '句数']], 4: [[1, '非空白字符上限']]}),
     ]
 
