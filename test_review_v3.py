@@ -23,6 +23,9 @@ class PacketTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.folder = Path(self.temp.name)
         case = interrupt_case(version=3)
+        # Every dimension is scored only where the turn has a requirement of it, so give turn 1 one of each.
+        for requirement, dimension in zip(case['evaluation']['requirements'], ('factuality', 'instruction', 'usefulness')):
+            requirement['dimension'] = dimension
         self.record = dict(job='J001', product='dsh', status='failed', case=case,
             turns=[dict(prompt=case['turns'][0]['prompt'], answer='已停止，未创建文件。',
                 artifacts={'meeting.txt':case['fixtures']['meeting.txt']}, notes='录屏显示收到停止时尚未写入', files={'meeting.txt':'hash'},
@@ -345,7 +348,7 @@ class LinkedCheckTests(unittest.TestCase):
                 for req in turn.get('requirements', []): req.update(status='met')
                 quote = [{'kind': 'prompt', 'turn': turn['number'], 'quote': sample['turns'][turn['number']-1]['prompt'][:12]}]
                 for field in review.FIELDS:
-                    has = field != 'instruction_following' or any(r['dimension'] == 'instruction' for r in turn.get('requirements', []))
+                    has = any(r['dimension'] == review.DIMENSION[field] for r in turn.get('requirements', []))
                     turn[field].update(score=5 if has else None, reason='逐项核对后的说明文字', evidence=quote if has else [])
         return sheet
 
@@ -361,9 +364,9 @@ class LinkedCheckTests(unittest.TestCase):
     def test_packet_lists_the_links_and_markdown_shows_them(self):
         path, packet = self.packet_for(self.guard_record('2026-12-03；500'))
         links = packet['samples'][0]['turns'][0]['requirement_checks']
-        self.assertIn({'id': 'R3', 'check': '只输出指定一行', 'pass': False}, links)
+        self.assertIn({'id': 'R3', 'check': '只输出指定一行', 'pass': False, 'decisive': True}, links)
         self.assertIn({'id': 'R2', 'check': '只创建获批文件', 'pass': True}, links)
-        self.assertIn('R3 ← 只输出指定一行：**未通过，该要求不得判met**', (path/'REVIEW-PACKET.md').read_text())
+        self.assertIn('R3 ← 只输出指定一行：**未通过（整条精确匹配），该要求只能判missed**', (path/'REVIEW-PACKET.md').read_text())
 
     def test_met_over_a_failed_linked_check_is_rejected(self):
         path, packet = self.packet_for(self.guard_record('2026-12-03；500'))
@@ -880,25 +883,28 @@ class UnifiedRuleTests(unittest.TestCase):
         packet = study.load(path/'review.json')
         order = [s['case']['id'] for s in packet['samples']]
         marks = {order.index('fact-only-fixture'): (5, None, 4),   # (5+4)/2 = 4.5
-                 order.index('refund-fixture'): (4, 4, 3),              # (4+4+3)/3
-                 order.index('multi-turn-fixture'): (5, None, 5)}           # unfinished: left out
+                 order.index('refund-fixture'): (4, 4, None),           # no usefulness requirement: (4+4)/2
+                 order.index('multi-turn-fixture'): (5, None, 5)}       # unfinished: turn 2 factuality scores 1
         study.save(path/'scores-r1.json', self.fill(study.load(path/'scores-r1.json'), packet, marks))
         self.assertEqual([r[-1] for r in self.rv.rows(self.folder, records) if '无效' in str(r[-1])], [])
         total, = self.rv.totals(self.folder, records)
-        self.assertAlmostEqual(total['total'], (4.5 + 11/3) / 2 * 20)
-        self.assertEqual((total['samples'], total['unfinished'], total['product']), (2, 1, 'A01'))
+        # multi-turn: factuality (5+1)/2 = 3, usefulness 5 -> 4
+        self.assertAlmostEqual(total['total'], (4.5 + 4 + 4) / 3 * 20)
+        self.assertEqual((total['samples'], total['unfinished'], total['product']), (3, 1, 'A01'))
         self.assertEqual(total['dimensions']['instruction_following'], {'mean': 4.0, 'samples': 1})
-        self.assertAlmostEqual(total['dimensions']['factuality']['mean'], 4.5)
+        self.assertAlmostEqual(total['dimensions']['factuality']['mean'], (5 + 4 + 3) / 3)
         text = self.rv.totals_markdown([total])
         self.assertIn('## 评审总分', text)
         self.assertIn(f'{total["total"]:.2f}', text)
         # A second reviewer gets a separate row; nothing is averaged across reviewers.
-        second = self.fill(study.load(path/'scores-r2.json'), packet, {i: (5, None if m[1] is None else 5, 5) for i, m in marks.items()})
+        second = self.fill(study.load(path/'scores-r2.json'), packet,
+                           {i: tuple(None if v is None else 5 for v in m) for i, m in marks.items()})
         second['reviewer'] = 'other'
         study.save(path/'scores-r2.json', second)
         both = self.rv.totals(self.folder, records)
         self.assertEqual([x['slot'] for x in both], ['r1', 'r2'])
-        self.assertAlmostEqual(both[1]['total'], 100)
+        # All submitted turns get 5, but the unsubmitted turn still costs the unfinished attempt: (5+5+4)/3.
+        self.assertAlmostEqual(both[1]['total'], (5 + 5 + 4) / 3 * 20)
         self.assertEqual(self.rv.totals_markdown([]), '')
 
     def test_totals_keep_component_suites_apart(self):
@@ -909,7 +915,7 @@ class UnifiedRuleTests(unittest.TestCase):
         path = self.rv.export(self.folder, [{'A01': r} for r in records])
         packet = study.load(path/'review.json')
         order = [s['case']['id'] for s in packet['samples']]
-        marks = {order.index('fact-only-fixture'): (5, None, 5), order.index('refund-fixture'): (4, 4, 4)}
+        marks = {order.index('fact-only-fixture'): (5, None, 5), order.index('refund-fixture'): (4, 4, None)}
         study.save(path/'scores-r1.json', self.fill(study.load(path/'scores-r1.json'), packet, marks))
         rows = self.rv.totals(self.folder, records)
         self.assertEqual([(x['suite'], x['samples']) for x in rows], [('v3-advanced5', 1), ('v3-challenge3', 1)])
@@ -939,7 +945,7 @@ class UnifiedRuleTests(unittest.TestCase):
         self.assertEqual(total['repeats']['second-fixture'], {'scored': 1, 'attempts': 2})
         self.assertIn('second-fixture 1/2', self.rv.totals_markdown([total]))
 
-    def test_unknown_applicable_round_withholds_total(self):
+    def test_undeterminable_dimension_is_left_out_and_counted(self):
         record = self.record('J1', 'multi-turn-fixture', ['首轮的事实判断正确。', '第二轮缺乏充分材料。'])
         path = self.rv.export(self.folder, [{'A01': record}])
         packet = study.load(path/'review.json')
@@ -947,6 +953,13 @@ class UnifiedRuleTests(unittest.TestCase):
         turn = sheet['samples'][0]['turns'][1]
         turn['requirements'][0].update(status='na', note='目前缺少可验证材料')
         turn['factuality'].update(score=None, reason='目前缺少可验证材料', evidence=[])
+        turn['usefulness'].update(score=None, evidence=[])  # turn 2 has no usefulness requirement
+        study.save(path/'scores-r1.json', sheet)
+        total, = self.rv.totals(self.folder, [record])
+        self.assertEqual(total['total'], 100)
+        self.assertEqual((total['samples'], total['unscored'], total['undetermined']), (1, 0, 1))
+        # A blank applicable dimension without an na requirement still withholds the total.
+        turn['requirements'][0].update(status='met', note='')
         study.save(path/'scores-r1.json', sheet)
         total, = self.rv.totals(self.folder, [record])
         self.assertIsNone(total['total'])
